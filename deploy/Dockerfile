@@ -1,8 +1,8 @@
 # 构建阶段：用 Maven 打包
 FROM maven:3.9-eclipse-temurin-17 AS builder
 WORKDIR /app
-COPY pom.xml .
-COPY src ./src
+COPY server/pom.xml .
+COPY server/src ./src
 RUN mvn -B clean package -DskipTests
 
 # 运行阶段：只带 JRE，镜像更小
