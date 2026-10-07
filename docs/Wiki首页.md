@@ -21,7 +21,7 @@ https://github.com/xych5q/online-shop
 
 | # | 报告 | 评审日期 | 状态 |
 | --- | --- | --- | --- |
-| 1 | [第 1 次阶段性报告](https://github.com/xych5q/online-shop/wiki/第1次阶段性评审报告) | 2026-10-08 | 待提交 |
+| 1 | [第 1 次阶段性评审报告](https://github.com/xych5q/online-shop/wiki/第1次阶段性评审报告) | 2026-10-08 | 待提交 |
 | 2 | [第 2 次阶段性报告](reports/第2次阶段性报告.md) |  |  |
 | 3 | 第 3 次阶段性报告 |  |  |
 | 4 | 第 4 次阶段性报告 |  |  |
