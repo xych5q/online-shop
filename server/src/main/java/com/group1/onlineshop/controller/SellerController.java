@@ -11,7 +11,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -142,17 +141,6 @@ public class SellerController {
     @GetMapping("/api/seller/history/{id}")
     public Map<String, Object> historyDetail(HttpServletRequest request, @PathVariable long id) {
         return sellerService.historyDetail(token(request), id);
-    }
-
-    /**
-     * 买家侧：获取当前在售/交易中商品（无鉴权），无商品时 product 为 null。
-     * TODO: 买家端控制器就绪后由其接管本接口，当前仅为联调与验收提供。
-     */
-    @GetMapping("/api/product")
-    public Map<String, Object> product() {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("product", productService.activeProduct());
-        return result;
     }
 
     /** 鉴权：token 无效时由 SellerService 抛 401「未登录或登录已失效」 */

@@ -33,6 +33,7 @@ public class ProductService {
 
     private final ProductRepository productRepository;
     private final IntentRepository intentRepository;
+    private final TradeService tradeService;
 
     /** 上传目录（application.yml: app.upload.dir = ./data/uploads） */
     @Value("${app.upload.dir}")
@@ -145,7 +146,7 @@ public class ProductService {
         if (product.getStatus() != Product.Status.ON_SALE) {
             throw new BizException("仅「在售」商品可进入交易");
         }
-        enterDealTemp(product); // TODO: 待 TradeService 就绪后改为调用 tradeService.enterDeal(product)
+        tradeService.enterDeal(product);
         return ok();
     }
 
@@ -164,7 +165,7 @@ public class ProductService {
         if (!"success".equals(result) && !"fail".equals(result)) {
             throw new BizException("参数错误");
         }
-        markResultTemp(product, result); // TODO: 待 TradeService 就绪后改为调用 tradeService.markResult(product, result)
+        tradeService.markResult(product, result);
         return ok();
     }
 
@@ -211,7 +212,7 @@ public class ProductService {
         if (!"void".equals(action) && !"requeue".equals(action)) {
             throw new BizException("参数错误");
         }
-        disposeFailedTemp(intent, action); // TODO: 待 TradeService 就绪后改为调用 tradeService.disposeFailed(intent, action)
+        tradeService.disposeFailed(intent, action);
         return ok();
     }
 
@@ -247,101 +248,6 @@ public class ProductService {
             throw new BizException("商品已下架");
         }
         return product;
-    }
-
-    /**
-     * 与队首进入交易（临时实现，规则与原型 enterDeal 一致）。
-     * TODO: 待 TradeService 就绪后改为调用 tradeService.enterDeal(product)，删除本方法
-     */
-    private void enterDealTemp(Product product) {
-        List<Intent> queue = intentRepository
-                .findByProductIdAndStatusOrderBySubmittedAtAscIdAsc(product.getId(), Intent.Status.QUEUED);
-        if (queue.isEmpty()) {
-            throw new BizException("当前没有排队的买家");
-        }
-        Intent head = queue.get(0);
-        head.setStatus(Intent.Status.IN_TRANSACTION);
-        intentRepository.save(head);
-        product.setStatus(Product.Status.FROZEN);
-        product.setFrozenBy("auto");
-        product.setFrozenAt(LocalDateTime.now());
-        productRepository.save(product);
-    }
-
-    /**
-     * 标记交易结果（临时实现，规则与原型 markResult 一致）。
-     * TODO: 待 TradeService 就绪后改为调用 tradeService.markResult(product, result)，删除本方法
-     */
-    private void markResultTemp(Product product, String result) {
-        Intent deal = intentRepository
-                .findByProductIdAndStatus(product.getId(), Intent.Status.IN_TRANSACTION)
-                .orElseThrow(() -> new BizException("当前没有进行中的交易"));
-        if ("success".equals(result)) {
-            deal.setStatus(Intent.Status.SUCCESS);
-            deal.setDisposed(true);
-            intentRepository.save(deal);
-            for (Intent it : intentRepository
-                    .findByProductIdAndStatusOrderBySubmittedAtAscIdAsc(product.getId(), Intent.Status.QUEUED)) {
-                it.setStatus(Intent.Status.FAILED);
-                it.setDisposed(true);
-                intentRepository.save(it);
-            }
-            product.setStatus(Product.Status.OFF_SHELF);
-            product.setClosedAt(LocalDateTime.now());
-            productRepository.save(product);
-            return;
-        }
-        // fail：当前意向转失败待处置
-        deal.setStatus(Intent.Status.FAILED);
-        deal.setDisposed(false);
-        intentRepository.save(deal);
-        List<Intent> queue = intentRepository
-                .findByProductIdAndStatusOrderBySubmittedAtAscIdAsc(product.getId(), Intent.Status.QUEUED);
-        if (!queue.isEmpty()) {
-            // 队列有人 → 下一位自动递补进入交易（无需卖家再次点击），商品保持冻结
-            queue.get(0).setStatus(Intent.Status.IN_TRANSACTION);
-            intentRepository.save(queue.get(0));
-            product.setFrozenAt(LocalDateTime.now());
-            productRepository.save(product);
-        } else {
-            // 队列无人 → 商品自动恢复在售
-            product.setStatus(Product.Status.ON_SALE);
-            product.setFrozenBy(null);
-            product.setFrozenAt(null);
-            productRepository.save(product);
-        }
-    }
-
-    /**
-     * 处置失败意向（临时实现，规则与原型 disposeFailed 一致）。
-     * TODO: 待 TradeService 就绪后改为调用 tradeService.disposeFailed(intent, action)，删除本方法
-     */
-    private void disposeFailedTemp(Intent intent, String action) {
-        Product product = productRepository.findById(intent.getProductId()).orElse(null);
-        if (product == null || product.getStatus() == Product.Status.OFF_SHELF) {
-            throw new BizException("商品已下架，无法处理");
-        }
-        intent.setDisposed(true);
-        if ("requeue".equals(action)) {
-            Intent requeued = new Intent();
-            requeued.setProductId(intent.getProductId());
-            requeued.setName(intent.getName());
-            requeued.setPhone(intent.getPhone());
-            requeued.setCode(intent.getCode()); // 重新排队不生成新口令码
-            requeued.setSubmittedAt(LocalDateTime.now()); // 提交时间刷新 → 排到队尾
-            requeued.setStatus(Intent.Status.QUEUED);
-            requeued.setRequeuedFrom(intent.getId());
-            requeued.setDisposed(false);
-            // 原型规则：重新排队沿用原口令码、原记录保留作历史流水。
-            // 但 entity 中 Intent.code 定义了唯一约束（unique=true），两行不能同码：
-            // 由于口令码只对未终态意向有效（买家 lookup 只认未终态，历史流水不返回口令码），
-            // 将已终态的原记录口令码改为带后缀的占位值、新记录沿用原码，对外行为与原型完全一致。
-            intent.setCode(intent.getCode() + "#r" + intent.getId());
-            intentRepository.save(intent);
-            intentRepository.save(requeued);
-        } else {
-            intentRepository.save(intent);
-        }
     }
 
     /**
