@@ -42,9 +42,10 @@
 | 分类 | 页面 |
 | --- | --- |
 | 评审 | [第1次阶段性评审报告](https://github.com/xych5q/online-shop/wiki/%E7%AC%AC1%E6%AC%A1%E9%98%B6%E6%AE%B5%E6%80%A7%E8%AF%84%E5%AE%A1%E6%8A%A5%E5%91%8A)（3.1~3.6） |
-| 接口与设计 | [接口设计](https://github.com/xych5q/online-shop/wiki/%E6%8E%A5%E5%8F%A3%E8%AE%BE%E8%AE%A1)、[用户故事与产品订单](https://github.com/xych5q/online-shop/wiki/%E7%94%A8%E6%88%B7%E6%95%85%E4%BA%8B%E4%B8%8E%E4%BA%A7%E5%93%81%E8%AE%A2%E5%8D%95) |
+| 需求 | [需求规格说明书 v1.1](https://github.com/xych5q/online-shop/wiki/%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6)（FR-S1~S9/FR-B1~B5）、[用例表](https://github.com/xych5q/online-shop/wiki/%E7%94%A8%E4%BE%8B%E8%A1%A8)、[业务流程图](https://github.com/xych5q/online-shop/wiki/%E4%B8%9A%E5%8A%A1%E6%B5%81%E7%A8%8B%E5%9B%BE)、[需求问题库](https://github.com/xych5q/online-shop/wiki/%E9%9C%80%E6%B1%82%E9%97%AE%E9%A2%98%E5%BA%93)、[用户故事与产品订单](https://github.com/xych5q/online-shop/wiki/%E7%94%A8%E6%88%B7%E6%95%85%E4%BA%8B%E4%B8%8E%E4%BA%A7%E5%93%81%E8%AE%A2%E5%8D%95) |
+| 测试 | [第1次测试记录](https://github.com/xych5q/online-shop/wiki/%E7%AC%AC1%E6%AC%A1%E6%B5%8B%E8%AF%95%E8%AE%B0%E5%BD%95)（JUnit 16/16 通过） |
 | 实现成果物 | [卖家端模块实现](https://github.com/xych5q/online-shop/wiki/%E5%8D%96%E5%AE%B6%E7%AB%AF%E6%A8%A1%E5%9D%97%E5%AE%9E%E7%8E%B0)（王振涛）、[买家端模块实现](https://github.com/xych5q/online-shop/wiki/%E4%B9%B0%E5%AE%B6%E7%AB%AF%E6%A8%A1%E5%9D%97%E5%AE%9E%E7%8E%B0)（林初俊）、[前端页面说明](https://github.com/xych5q/online-shop/wiki/%E5%89%8D%E7%AB%AF%E9%A1%B5%E9%9D%A2%E8%AF%B4%E6%98%8E)（嵇宇锋） |
-| 进度与手册 | [Java实现进度](https://github.com/xych5q/online-shop/wiki/Java%E5%AE%9E%E7%8E%B0%E8%BF%9B%E5%BA%A6)、[构建与部署手册](https://github.com/xych5q/online-shop/wiki/%E6%9E%84%E5%BB%BA%E4%B8%8E%E9%83%A8%E7%BD%B2%E6%89%8B%E5%86%8C)、[原型实现说明](https://github.com/xych5q/online-shop/wiki/%E5%8E%9F%E5%9E%8B%E5%AE%9E%E7%8E%B0%E8%AF%B4%E6%98%8E) |
+| 进度与手册 | [Java实现进度](https://github.com/xych5q/online-shop/wiki/Java%E5%AE%9E%E7%8E%B0%E8%BF%9B%E5%BA%A6)、[构建与部署手册](https://github.com/xych5q/online-shop/wiki/%E6%9E%84%E5%BB%BA%E4%B8%8E%E9%83%A8%E7%BD%B2%E6%89%8B%E5%86%8C)、[接口设计](https://github.com/xych5q/online-shop/wiki/%E6%8E%A5%E5%8F%A3%E8%AE%BE%E8%AE%A1)、[原型实现说明](https://github.com/xych5q/online-shop/wiki/%E5%8E%9F%E5%9E%8B%E5%AE%9E%E7%8E%B0%E8%AF%B4%E6%98%8E) |
 
 ## 需求文档
 
