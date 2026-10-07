@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>好物排队购 —— 买家页</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="container">
+  <div class="topbar">
+    <div>
+      <h1>好物排队购</h1>
+      <div class="sub">先到先得 · 线下当面交易</div>
+    </div>
+    <a href="/admin.html">卖家入口 →</a>
+  </div>
+
+  <!-- 在售商品 -->
+  <div class="card" id="productCard">
+    <div id="productArea"></div>
+  </div>
+
+  <!-- 我的排队 -->
+  <div class="card">
+    <h2>我的排队</h2>
+    <div class="lookup-bar">
+      <input type="text" id="codeInput" placeholder="输入口令码，查询排队位次" maxlength="8" style="text-transform:uppercase">
+      <button class="btn btn-primary" id="lookupBtn">查询</button>
+    </div>
+    <div class="lookup-result" id="lookupResult"></div>
+  </div>
+</div>
+
+<!-- 购买弹窗 -->
+<div class="modal-mask" id="buyMask">
+  <div class="modal">
+    <button class="close-x" data-close="buyMask">×</button>
+    <h3>提交购买意向</h3>
+    <div class="form">
+      <div>
+        <label>姓名<span class="req">*</span></label>
+        <input type="text" id="buyName" maxlength="50" placeholder="你的姓名">
+      </div>
+      <div>
+        <label>联系电话<span class="req">*</span></label>
+        <input type="text" id="buyPhone" maxlength="30" placeholder="用于卖家线下联系你">
+      </div>
+      <div class="error" id="buyError"></div>
+      <button class="btn btn-primary btn-block" id="buySubmit">确认提交，加入排队</button>
+    </div>
+  </div>
+</div>
+
+<!-- 口令码成功弹窗 -->
+<div class="modal-mask" id="codeMask">
+  <div class="modal">
+    <h3 style="text-align:center">提交成功，已加入排队！</h3>
+    <div class="code-box">
+      <div class="tip">你的专属口令码（仅显示这一次）</div>
+      <div class="code" id="codeText"></div>
+      <button class="btn btn-outline btn-sm" id="copyCode">复制口令码</button>
+      <div class="warn">⚠️ 口令码只显示这一次，之后系统不会再展示，请务必截图或抄写保存。<br>凭口令码可查询排队位次、修改联系信息、撤销意向。</div>
+    </div>
+    <div class="divider"></div>
+    <div style="text-align:center">
+      <button class="btn btn-primary" id="codeDone">我已保存好口令码</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/buyer.js"></script>
+</body>
+</html>
