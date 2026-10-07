@@ -1,0 +1,9 @@
+{
+  "name": "single-seller-queue-trade",
+  "version": "1.0.0",
+  "description": "单卖家排队交易系统（零依赖，Node.js）",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
