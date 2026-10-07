@@ -1,7 +1,7 @@
 # Java 正式实现进度
 
 > 第 1 组 · 迭代 1　|　仓库目录：`server/`（Spring Boot 3.3.4 + JDK 17+ + Maven + H2）
-> 与需求规则基线 [[原型实现说明]]（Node.js 原型）一一对应：原型负责"规则是否正确"，Java 负责"是否可交付"。
+> 实现依据：[[需求规格说明书]] v1.3 的 FR-S1~S9 / FR-B1~B5 与第 4 节状态机；本页记录 Java 侧的落地情况、集成问题处理与演示脚本。
 
 ## 一、分层与责任人
 
@@ -52,7 +52,7 @@
 | 4 | `PUT /api/intents/lookup/{code}` | 只改姓名电话，`submittedAt` 不动 → **排队位次不变** |
 | 5 | `POST /api/intents/lookup/{code}/cancel` | 交易中拒绝撤销；其余置 `cancelled`（终态留痕） |
 
-**交易流转规则**（翻译自原型 `server.js` 第 135~221、330~395 行，未作改动）：队首不可挑人、进入交易自动冻结、标记成功清队进历史、标记失败自动递补或恢复在售、重排沿用原码排到队尾。
+**交易流转规则**（依据 [[需求规格说明书]] 第 4.1~4.3 节，未作改动）：队首不可挑人、进入交易自动冻结、标记成功清队进历史、标记失败自动递补或恢复在售、重排沿用原码排到队尾。
 
 ## 四、单元测试（JUnit 5，组长本地复跑验证）
 
@@ -71,7 +71,7 @@
 
 | # | 问题 | 处理 | 状态 |
 | --- | --- | --- | --- |
-| TD-1 | `Intent.code` 唯一约束 vs "重排沿用原码" | 终态原记录改码为 `原码#r{id}` 占位、新记录沿用原码；林初俊进一步修复了原临时实现的 Hibernate「INSERT 先于 UPDATE」缺陷，改为 `saveAndFlush` 先落库 | ✅ 已解决（对外行为与原型一致） |
+| TD-1 | `Intent.code` 唯一约束 vs "重排沿用原码" | 终态原记录改码为 `原码#r{id}` 占位、新记录沿用原码；林初俊进一步修复了原临时实现的 Hibernate「INSERT 先于 UPDATE」缺陷，改为 `saveAndFlush` 先落库 | ✅ 已解决 |
 | TD-2 | `TradeService` 未入库时的临时实现 | `ProductService` 注入 `TradeService`，三处 `xxxTemp` 临时方法已删除并改为正式调用 | ✅ 已解决（`cac53ac`） |
 | TD-3 | `GET /api/product` 重复映射风险 | 已从 `SellerController` 删除，仅保留在 `BuyerController` | ✅ 已解决（`cac53ac`） |
 | TD-4 | 验收清单中 history 写 POST，接口设计写 GET | 按 [[接口设计]] 实现为 GET | ✅ 已对齐 |
@@ -93,6 +93,6 @@
 
 演示前须启动：`cd server && java -jar target/online-shop.jar`（H2 文件库，无需 MySQL）。管理员账号密码见启动日志（首次启动自动创建）。
 
-**前端已迁入并完成联调**：组长本地实测——执行 `mvn package` 后 `java -jar target/online-shop.jar`，访问 `/index.html`（买家端）与 `/admin.html`（卖家后台）均返回 HTTP 200，style.css / buyer.js / admin.js 全部加载正常，`/api/product` 返回真实商品数据。即**可直接用浏览器演示完整流程**，无需再依赖 Node 原型。
+**前端已迁入并完成联调**：组长本地实测——执行 `mvn package` 后 `java -jar target/online-shop.jar`，访问 `/index.html`（买家端）与 `/admin.html`（卖家后台）均返回 HTTP 200，style.css / buyer.js / admin.js 全部加载正常，`/api/product` 返回真实商品数据。即**可直接用浏览器演示完整流程**，无需额外依赖。
 
-演示时使用默认端口 8080（`java -jar target/online-shop.jar`），管理员账号密码见启动日志首次创建时打印的内容。仍须主动说明："原型为 Node.js 规则验证实现，正式交付为 Java，前后端与单元测试均已完成；Docker 部署与 Selenium/JMeter 测试为迭代 2 工作。"
+演示时使用默认端口 8080（`java -jar target/online-shop.jar`），管理员账号密码见启动日志首次创建时打印的内容。说明口径："正式交付为 Java 实现，前后端与单元测试均已完成；Selenium / JMeter 测试与 Docker 部署实测为迭代 2 工作。"
