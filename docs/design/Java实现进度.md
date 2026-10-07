@@ -1,19 +1,19 @@
 # Java 正式实现进度
 
 > 第 1 组 · 迭代 1　|　仓库目录：`server/`（Spring Boot 3.3.4 + JDK 17+ + Maven + H2）
-> 实现依据：[[需求规格说明书]] v1.3 的 FR-S1~S9 / FR-B1~B5 与第 4 节状态机；本页记录 Java 侧的落地情况、集成问题处理与演示脚本。
+> 实现依据：[[需求规格说明书]] v1.3 的 FR-S1~S9 / FR-B1~B5 与第 4 节状态机；这里记录 Java 侧的实现情况、集成问题处理与演示脚本。
 
 ## 一、分层与责任人
 
 | 层 | 内容 | 责任人 | 状态 |
 | --- | --- | --- | --- |
-| 骨架 | `pom.xml`、`application.yml`、`entity/`、`repository/`、`exception/`、`config/` | 陈星宇 | ✅ 已完成（`ce56672`） |
-| 卖家端 | `SellerService`、`ProductService`、`SellerController`（12 接口，836 行） | 王振涛 | ✅ 已完成（`f4d8821`） |
-| 买家端 | `IntentService`、`TradeService`、`BuyerController`（5 接口，454 行） | 林初俊 | ✅ 已完成（`cac53ac`） |
-| 单元测试 | JUnit 5 + MockMvc，16 组用例（457 行） | 林初俊 | ✅ 已完成（`cac53ac`） |
-| 前端 | `static/`（由 `prototype/public/` 迁入，5 个文件） | 嵇宇锋 | ✅ 已完成（`a4c7081`） |
-| 构建部署 | Maven 已通；Docker 镜像与部署手册实测 | 陈星宇 | 🔄 进行中 |
-| 端到端/性能测试 | Selenium、JMeter | 待分配 | ⬜ 未开始（迭代 2） |
+| 骨架 | `pom.xml`、`application.yml`、`entity/`、`repository/`、`exception/`、`config/` | 陈星宇 | 已完成（`ce56672`） |
+| 卖家端 | `SellerService`、`ProductService`、`SellerController`（12 接口，836 行） | 王振涛 | 已完成（`f4d8821`） |
+| 买家端 | `IntentService`、`TradeService`、`BuyerController`（5 接口，454 行） | 林初俊 | 已完成（`cac53ac`） |
+| 单元测试 | JUnit 5 + MockMvc，16 组用例（457 行） | 林初俊 | 已完成（`cac53ac`） |
+| 前端 | `static/`（5 个页面文件） | 嵇宇锋 | 已完成（`a4c7081`） |
+| 构建部署 | Maven 已通；Docker 镜像与部署手册实测 | 陈星宇 | 进行中 |
+| 端到端/性能测试 | Selenium、JMeter | 待分配 | 未开始（迭代 2） |
 
 **代码规模合计**：主代码 1290 行 + 测试 457 行 = 1747 行（不含骨架）。
 
@@ -65,22 +65,22 @@
 
 16 组用例覆盖：登录鉴权与 token 失效、参数边界（价格 -1、空姓名电话）、重复发布拦截、三人入队位次 1/2/3、无效口令码 404、改电话位次不变、撤销后口令码失效、冻结态拒绝新意向、交易中禁止手动解冻、失败后自动递补、重排沿用原码且排到队尾、成功后队列转失败、历史流水不含口令码。
 
-采用 `@SpringBootTest + @AutoConfigureMockMvc` 走真实 Spring MVC 链路（含统一异常处理），每个用例前清空数据保证独立。
+采用 `@SpringBootTest + @AutoConfigureMockMvc` 走真实 Spring MVC 流程（含统一异常处理），每个用例前清空数据保证独立。
 
 ## 五、技术债处理情况
 
 | # | 问题 | 处理 | 状态 |
 | --- | --- | --- | --- |
-| TD-1 | `Intent.code` 唯一约束 vs "重排沿用原码" | 终态原记录改码为 `原码#r{id}` 占位、新记录沿用原码；林初俊进一步修复了原临时实现的 Hibernate「INSERT 先于 UPDATE」缺陷，改为 `saveAndFlush` 先落库 | ✅ 已解决 |
-| TD-2 | `TradeService` 未入库时的临时实现 | `ProductService` 注入 `TradeService`，三处 `xxxTemp` 临时方法已删除并改为正式调用 | ✅ 已解决（`cac53ac`） |
-| TD-3 | `GET /api/product` 重复映射风险 | 已从 `SellerController` 删除，仅保留在 `BuyerController` | ✅ 已解决（`cac53ac`） |
-| TD-4 | 验收清单中 history 写 POST，接口设计写 GET | 按 [[接口设计]] 实现为 GET | ✅ 已对齐 |
+| TD-1 | `Intent.code` 唯一约束 vs "重排沿用原码" | 终态原记录改码为 `原码#r{id}` 占位、新记录沿用原码；林初俊进一步修复了原临时实现的 Hibernate「INSERT 先于 UPDATE」缺陷，改为 `saveAndFlush` 先落库 | 已解决 |
+| TD-2 | `TradeService` 未入库时的临时实现 | `ProductService` 注入 `TradeService`，三处 `xxxTemp` 临时方法已删除并改为正式调用 | 已解决（`cac53ac`） |
+| TD-3 | `GET /api/product` 重复映射风险 | 已从 `SellerController` 删除，仅保留在 `BuyerController` | 已解决（`cac53ac`） |
+| TD-4 | 验收清单中 history 写 POST，接口设计写 GET | 按 [[接口设计]] 实现为 GET | 已对齐 |
 
 **遗留观察项**（不影响交付，记录备查）：TD-1 方案会在数据库终态记录上留下 `原码#r{id}` 形式的占位值。若后续需彻底清理，应改为"仅对未终态意向做应用层唯一校验"并去掉数据库唯一约束。
 
 ## 六、明天（10-08）演示口径
 
-**Java 版已可演示买卖双方完整全链路**：
+**Java 版已可演示买卖双方完整流程**：
 
 1. 卖家登录 → 发布商品
 2. 买家浏览商品 → 提交意向 → 取得口令码（仅显示一次）
