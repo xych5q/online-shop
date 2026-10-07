@@ -11,7 +11,7 @@
 | 卖家端 | `SellerService`、`ProductService`、`SellerController`（12 接口，836 行） | 王振涛 | ✅ 已完成（`f4d8821`） |
 | 买家端 | `IntentService`、`TradeService`、`BuyerController`（5 接口，454 行） | 林初俊 | ✅ 已完成（`cac53ac`） |
 | 单元测试 | JUnit 5 + MockMvc，16 组用例（457 行） | 林初俊 | ✅ 已完成（`cac53ac`） |
-| 前端 | `static/`（由 `prototype/public/` 迁入） | 嵇宇锋 | 🔄 进行中 |
+| 前端 | `static/`（由 `prototype/public/` 迁入，5 个文件） | 嵇宇锋 | ✅ 已完成（`a4c7081`） |
 | 构建部署 | Maven 已通；Docker 镜像与部署手册实测 | 陈星宇 | 🔄 进行中 |
 | 端到端/性能测试 | Selenium、JMeter | 待分配 | ⬜ 未开始（迭代 2） |
 
@@ -93,4 +93,6 @@
 
 演示前须启动：`cd server && java -jar target/online-shop.jar`（H2 文件库，无需 MySQL）。管理员账号密码见启动日志（首次启动自动创建）。
 
-**前端页面（嵇宇锋）尚未接入**，演示时可用 curl / 接口工具配合 Node 原型页面进行；须主动说明："原型为 Node.js 规则验证实现，正式交付为 Java，后端接口与单元测试已完成。"
+**前端已迁入并完成联调**：组长本地实测——执行 `mvn package` 后 `java -jar target/online-shop.jar`，访问 `/index.html`（买家端）与 `/admin.html`（卖家后台）均返回 HTTP 200，style.css / buyer.js / admin.js 全部加载正常，`/api/product` 返回真实商品数据。即**可直接用浏览器演示完整流程**，无需再依赖 Node 原型。
+
+演示时使用默认端口 8080（`java -jar target/online-shop.jar`），管理员账号密码见启动日志首次创建时打印的内容。仍须主动说明："原型为 Node.js 规则验证实现，正式交付为 Java，前后端与单元测试均已完成；Docker 部署与 Selenium/JMeter 测试为迭代 2 工作。"
