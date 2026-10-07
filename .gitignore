@@ -1,24 +1,53 @@
-# Compiled class file
+# ===== Maven / Java =====
+target/
+!.mvn/wrapper/maven-wrapper.jar
 *.class
-
-# Log file
-*.log
-
-# BlueJ files
-*.ctxt
-
-# Mobile Tools for Java (J2ME)
-.mtj.tmp/
-
-# Package Files #
 *.jar
 *.war
-*.nar
 *.ear
-*.zip
-*.tar.gz
-*.rar
+*.log
 
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
-hs_err_pid*
-replay_pid*
+# ===== IDE =====
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+*.swp
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== 环境与密钥（严禁提交）=====
+.env
+*.properties.local
+application-secret.yml
+*.pem
+*.key
+
+# ===== 数据库本地文件 =====
+*.db
+*.sqlite
+*.sqlite3
+
+# ===== 测试与构建产物 =====
+test-output/
+jmeter.log
+surefire-reports/
+allure-results/
+
+# ===== Python（辅助脚本）=====
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# ===== 大文件（录屏另存云盘/Release）=====
+*.mp4
+*.avi
+*.mov
+*.iso
