@@ -38,6 +38,7 @@ public class IntentService {
 
     private final IntentRepository intentRepository;
     private final ProductRepository productRepository;
+    private final TradeService tradeService;
 
     /**
      * 提交购买意向。
@@ -139,9 +140,10 @@ public class IntentService {
 
     /**
      * 撤销意向。
-     * 业务规则：口令码无效或已失效 → 404；
-     * 已进入交易 → 400「你已进入交易，无法自行撤销，请联系卖家」；
-     * 其余状态置为已撤销（终态，历史留痕）。
+     * 业务规则（对齐 SRS v1.3 FR-B5，2026-10-07 需求方拍板口径）：口令码无效或已失效 → 404；
+     * 交易中买家仍可撤销：交易终止，该意向置已撤销（终态，历史留痕）；
+     * 队列有人 → 下一位自动递补进入交易（商品保持冻结）；队列无人 → 商品自动恢复在售。
+     * 其余（排队中）状态直接置为已撤销。
      *
      * @param code 口令码
      */
@@ -149,7 +151,8 @@ public class IntentService {
     public void cancel(String code) {
         Intent intent = findActiveByCode(code);
         if (intent.getStatus() == Intent.Status.IN_TRANSACTION) {
-            throw new BizException("你已进入交易，无法自行撤销，请联系卖家");
+            tradeService.abortDealByBuyer(intent);
+            return;
         }
         intent.setStatus(Intent.Status.CANCELLED);
         intentRepository.save(intent);

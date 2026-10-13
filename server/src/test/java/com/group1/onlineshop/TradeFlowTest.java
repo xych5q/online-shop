@@ -22,6 +22,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -176,6 +177,40 @@ class TradeFlowTest {
                 .andExpect(jsonPath("$.intents[0].phone").exists())
                 .andExpect(jsonPath("$.intents[0].code").doesNotExist())
                 .andExpect(jsonPath("$.intents[1].code").doesNotExist());
+    }
+
+    /** 用例 17（SRS v1.3 FR-B5）：交易中买家可撤销 → 交易终止，下一位自动递补进入交易，商品保持冻结。 */
+    @Test
+    void 交易中买家可撤销且队列自动递补() {
+        Product product = createOnSaleProduct();
+        String codeA = submit("张三", "13800000001");
+        String codeB = submit("李四", "13800000002");
+        tradeService.enterDeal(product);
+        assertEquals(Intent.Status.IN_TRANSACTION, intentRepository.findByCode(codeA).orElseThrow().getStatus());
+
+        intentService.cancel(codeA); // 交易中撤销不再被拒绝
+
+        assertEquals(Intent.Status.CANCELLED, intentRepository.findByCode(codeA).orElseThrow().getStatus());
+        assertEquals(Intent.Status.IN_TRANSACTION, intentRepository.findByCode(codeB).orElseThrow().getStatus());
+        Product reloaded = productRepository.findById(product.getId()).orElseThrow();
+        assertEquals(Product.Status.FROZEN, reloaded.getStatus());
+        assertEquals("auto", reloaded.getFrozenBy());
+    }
+
+    /** 用例 18：交易中撤销且队列无人 → 商品自动恢复在售。 */
+    @Test
+    void 交易中撤销且队列无人时商品恢复在售() {
+        Product product = createOnSaleProduct();
+        String codeA = submit("张三", "13800000001");
+        tradeService.enterDeal(product);
+
+        intentService.cancel(codeA);
+
+        assertEquals(Intent.Status.CANCELLED, intentRepository.findByCode(codeA).orElseThrow().getStatus());
+        Product reloaded = productRepository.findById(product.getId()).orElseThrow();
+        assertEquals(Product.Status.ON_SALE, reloaded.getStatus());
+        assertNull(reloaded.getFrozenBy());
+        assertNull(reloaded.getFrozenAt());
     }
 
     /** 直接落库一个在售商品（测试数据准备） */

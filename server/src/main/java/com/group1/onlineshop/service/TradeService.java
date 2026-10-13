@@ -47,6 +47,41 @@ public class TradeService {
     }
 
     /**
+     * 买家在交易中撤销（SRS v1.3 FR-B5 拍板口径：交易中买家仍可撤销）。
+     * 业务规则：当前意向置已撤销（终态，历史留痕），交易终止；
+     * 队列有人 → 下一位自动递补进入交易（商品保持冻结，frozenBy='auto'）；
+     * 队列无人 → 商品自动恢复在售并清空 frozenBy / frozenAt。
+     *
+     * @param deal 当前交易中的意向
+     */
+    @Transactional
+    public void abortDealByBuyer(Intent deal) {
+        Product product = productRepository.findById(deal.getProductId()).orElse(null);
+        deal.setStatus(Intent.Status.CANCELLED);
+        intentRepository.save(deal);
+        if (product == null) {
+            return;
+        }
+        List<Intent> queue = intentRepository
+                .findByProductIdAndStatusOrderBySubmittedAtAscIdAsc(product.getId(), Intent.Status.QUEUED);
+        if (!queue.isEmpty()) {
+            // 队列有人 → 下一位自动递补进入交易，商品保持冻结
+            Intent next = queue.get(0);
+            next.setStatus(Intent.Status.IN_TRANSACTION);
+            intentRepository.save(next);
+            product.setStatus(Product.Status.FROZEN);
+            product.setFrozenBy("auto");
+            product.setFrozenAt(LocalDateTime.now());
+        } else {
+            // 队列无人 → 商品自动恢复在售
+            product.setStatus(Product.Status.ON_SALE);
+            product.setFrozenBy(null);
+            product.setFrozenAt(null);
+        }
+        productRepository.save(product);
+    }
+
+    /**
      * 标记交易结果。
      * 业务规则：当前无进行中的交易 → 400「当前没有进行中的交易」；result 只接受 success / fail，其他值 400「参数错误」。
      * success：胜出意向置成功且 disposed=true，队列剩余排队中意向全部置失败且 disposed=true，商品下架进历史（closedAt=now）；
