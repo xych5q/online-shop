@@ -1,0 +1,17 @@
+# 行尾约定：脚本必须始终是 LF，否则在 Linux / Git Bash 下会因 \r 报“命令找不到”
+*.sh            text eol=lf
+
+# 源码与文档统一按 LF 存、按本机习惯检出（Git 默认行为即可）
+*.java          text
+*.md            text
+*.yml           text
+*.yaml          text
+*.xml           text
+
+# 二进制：禁止做任何转换
+*.jar           binary
+*.png           binary
+*.pdf           binary
+*.pptx          binary
+*.docx          binary
+*.db            binary
