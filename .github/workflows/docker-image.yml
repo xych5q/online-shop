@@ -1,0 +1,106 @@
+# ============================================================================
+# 云端构建 Docker 镜像（本机没有 Docker 时的验收入口）
+#
+# 触发：
+#   ① 推送 v* 标签时自动跑（例如 tag v0.1-iter1）
+#   ②  Actions 页面手动点 "Run workflow"（可自定义镜像 tag）
+#
+# 产出：
+#   - 镜像推送到 GitHub 容器仓库 ghcr.io/xych5q/online-shop:<版本>
+#   - 在同一个容器实例上跑 test-cases/api-smoke.sh（44 项断言）作为部署验证
+#   - docker save 出的 tar 作为 Release 附件，可直接下载当验收材料
+#
+# 验收时怎么用：
+#   docker pull ghcr.io/xych5q/online-shop:0.1-iter1
+#   docker run -d --name online-shop -p 8080:8080 ghcr.io/xych5q/online-shop:0.1-iter1
+# ============================================================================
+
+name: Docker Image
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '镜像标签'
+        required: false
+        default: 'latest'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 解析版本号
+        id: ver
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 安装 JDK 21 并跑单元测试
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+      - run: cd server && mvn -B clean package
+
+      - name: 准备 Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建并推送镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./deploy/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/xych5q/online-shop:${{ steps.ver.outputs.tag }}
+            ghcr.io/xych5q/online-shop:latest
+
+      - name: 起容器并跑接口冒烟（44 项断言）
+        run: |
+          docker run -d --name shop -p 8080:8080 \
+            ghcr.io/xych5q/online-shop:${{ steps.ver.outputs.tag }}
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/product || true)
+            [ "$code" = "200" ] && break
+            sleep 2
+          done
+          BASE=http://localhost:8080 bash test-cases/api-smoke.sh
+
+      - name: 导出镜像 tar
+        run: |
+          mkdir -p dist
+          docker save ghcr.io/xych5q/online-shop:${{ steps.ver.outputs.tag }} \
+            -o dist/online-shop-${{ steps.ver.outputs.tag }}.tar
+          ls -lh dist
+
+      - name: 挂到 Release（标签触发时）
+        if: startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME} 迭代基线" \
+            --generate-notes \
+            dist/*.tar || gh release upload "${GITHUB_REF_NAME}" dist/*.tar --clobber
