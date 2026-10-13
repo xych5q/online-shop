@@ -1,0 +1,29 @@
+# ============================================================================
+# 在线购物系统 · 容器编排（单机部署）
+# 用法（在仓库根目录执行）：
+#   docker compose -f deploy/docker-compose.yml up -d      # 启动
+#   docker compose -f deploy/docker-compose.yml logs -f    # 看日志
+#   docker compose -f deploy/docker-compose.yml down       # 停止并移除容器
+#   docker compose -f deploy/docker-compose.yml down -v    # 连数据卷一起删（重置数据）
+# ============================================================================
+
+services:
+  online-shop:
+    image: online-shop:0.1
+    container_name: online-shop
+    build:
+      context: ..            # 构建上下文必须是仓库根目录
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: Asia/Shanghai
+      # 容器内路径；持久化靠下面的 named volume
+      JAVA_OPTS: ""
+    volumes:
+      # H2 文件库 + 上传目录都落在 /app/data 下，挂卷后容器重启数据不丢
+      - shop-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  shop-data:

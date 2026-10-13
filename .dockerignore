@@ -1,0 +1,22 @@
+# 构建上下文裁剪：只保留 deploy/Dockerfile 真正需要的 server 工程文件
+# 目的：缩小上下文体积、加快 docker build、避免把 target/ 与本地 H2 数据打进镜像层
+
+.git/
+.github/
+.idea/
+.vscode/
+.workbuddy/
+
+# Maven 产物与本地测试数据
+server/target/
+server/data/
+server/data-smoke/
+**/target/
+
+# 文档、幻灯片、测试用例不属于运行时产物
+docs/
+test-cases/
+deploy/
+CONTRIBUTING.md
+LICENSE
+README.md

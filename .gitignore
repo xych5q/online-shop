@@ -51,3 +51,7 @@ venv/
 *.avi
 *.mov
 *.iso
+
+# ===== 构建/部署产物 =====
+dist/
+data-smoke/
