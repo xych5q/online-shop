@@ -28,11 +28,11 @@
 
 ## 三、文档中心
 
-- [Wiki 首页](docs/Wiki首页.md)
+- [项目 Wiki 首页](https://github.com/xych5q/online-shop/wiki)
 - [需求规格说明书](docs/requirements/)
 - [阶段性报告](docs/reports/)
-- [会议记录](docs/meeting/)
-- [验收材料清单](docs/验收材料清单.md)
+- [构建手册](build/构建手册.md) ｜ [部署手册](deploy/部署手册.md)
+- [测试用例清单](test-cases/测试用例清单.md)
 - [协作规范](CONTRIBUTING.md)
 
 ## 四、目录结构
