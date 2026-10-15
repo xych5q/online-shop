@@ -94,6 +94,15 @@ jobs:
             -o dist/online-shop-${{ steps.ver.outputs.tag }}.tar
           ls -lh dist
 
+      # 验收标准第 3 项要求「构建结果文件」，第 5 项要求「屏幕录制视频」。
+      # 两者都挂到 Release，可拿到 github.com 的直链（避免依赖 raw.githubusercontent.com）。
+      - name: 准备附加产物（构建结果 jar + 演示录屏）
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          cp server/target/online-shop.jar "dist/online-shop-${TAG}.jar" || echo "未找到 jar，跳过"
+          cp "docs/design/screenshots/演示录屏.mp4" "dist/online-shop-demo-${TAG}.mp4" || echo "未找到录屏，跳过"
+          ls -lh dist
+
       - name: 挂到 Release（标签触发时）
         if: startsWith(github.ref, 'refs/tags/v')
         continue-on-error: true
@@ -103,4 +112,4 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME} 迭代基线" \
             --generate-notes \
-            dist/*.tar || gh release upload "${GITHUB_REF_NAME}" dist/*.tar --clobber
+            dist/* || gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
