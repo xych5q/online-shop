@@ -1,8 +1,8 @@
 # 迭代 2 代码所有权（与 Wiki《迭代2分工与交付物责任矩阵》一致）
 #
 # 作用：改了下面任一文件，GitHub 会自动要求对应 owner 审查，避免互相覆盖。
-# owner 必须是 GitHub 用户名。尚未收集到用户名的同学，其模块暂由组长 @xych5q 代管，
-# 用户名收齐后请把对应行的 @xych5q 换成本人用户名（见文件末尾 TODO）。
+# 前提：仓库 Ruleset 里必须勾选「Require review from Code Owners」，否则本文件不生效。
+# 成员：陈星宇 @xych5q（组长）｜董嘉润 @jrdong666（PO）｜王振涛 @Tao1122-del｜林初俊 @Lotus0506｜嵇宇锋 @qfwl1
 
 # 数据模型与迁移 —— 陈星宇（组长）
 /server/src/main/java/com/group1/onlineshop/entity/       @xych5q
@@ -10,16 +10,16 @@
 /server/src/main/java/com/group1/onlineshop/config/       @xych5q
 
 # 队列与交易 —— 王振涛
-/server/src/main/java/com/group1/onlineshop/service/TradeService.java    @xych5q
-/server/src/main/java/com/group1/onlineshop/service/IntentService.java   @xych5q
+/server/src/main/java/com/group1/onlineshop/service/TradeService.java    @Tao1122-del
+/server/src/main/java/com/group1/onlineshop/service/IntentService.java   @Tao1122-del
 
 # 卖家后台（多商品、类别、库存、客户与购买历史）—— 林初俊
-/server/src/main/java/com/group1/onlineshop/service/ProductService.java         @xych5q
-/server/src/main/java/com/group1/onlineshop/service/SellerService.java          @xych5q
-/server/src/main/java/com/group1/onlineshop/controller/SellerController.java    @xych5q
+/server/src/main/java/com/group1/onlineshop/service/ProductService.java         @Lotus0506
+/server/src/main/java/com/group1/onlineshop/service/SellerService.java          @Lotus0506
+/server/src/main/java/com/group1/onlineshop/controller/SellerController.java    @Lotus0506
 
 # 商品浏览与搜索（查询接口 + 列表页 / 详情页）—— 嵇宇锋
-/server/src/main/resources/static/   @xych5q
+/server/src/main/resources/static/   @qfwl1
 
 # 买家账号与我的历史 —— 董嘉润
 /server/src/main/java/com/group1/onlineshop/controller/BuyerController.java   @jrdong666
@@ -27,9 +27,3 @@
 # 文档、报告与仓库配置 —— 陈星宇
 /docs/      @xych5q
 /.github/   @xych5q
-
-# TODO（用户名收齐后替换）：
-#   service/TradeService.java、service/IntentService.java                       → 王振涛
-#   service/ProductService.java、service/SellerService.java、
-#   controller/SellerController.java                                            → 林初俊
-#   server/src/main/resources/static/                                           → 嵇宇锋
