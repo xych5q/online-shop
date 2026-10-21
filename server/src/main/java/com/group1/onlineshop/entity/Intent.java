@@ -101,4 +101,16 @@ public class Intent {
 
     /** 重新排队时指向原意向 id（口径：买家自行重新提交即为新记录，此字段不再自动使用） */
     private Long requeuedFrom;
+
+    /**
+     * 交易结束时间：卖家标记交易结果的时刻，成功与失败都写入（A.2.2-2「交易时间」）。
+     *
+     * <p>为什么不复用 {@code Product.closedAt}：成交不再等于下架（A.1.3-4），
+     * 库存仍有剩余时商品回到在售、{@code closedAt} 保持 {@code null}，
+     * 此时用商品下架时间会取不到值，买家历史里的「交易时间」将为空。
+     * 因此交易时间必须是<b>意向自身的字段</b>，由交易服务在标记结果时写入。
+     *
+     * <p>未成交（排队中、交易中、售罄失效、已归档）为 {@code null}。
+     */
+    private LocalDateTime dealtAt;
 }

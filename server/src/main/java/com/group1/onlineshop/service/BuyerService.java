@@ -173,19 +173,20 @@ public class BuyerService {
      * <p>出参 {page,totalPages,total,items[]}，每条含：商品名称、下单时间、交易结果（三值）、交易时间。
      * <b>不含价格与图片</b>（A.2.2-4）；旧系统归档数据 buyerId 为 null，自然不会出现（A.2.4-3）。
      *
+     * <p><b>ARCHIVED 在查询层排除</b>（PR #2 评审意见）：分页的 total / totalPages 直接由
+     * {@code findByBuyerIdAndStatusNot...} 得出，不再「查出来再 continue」——否则归档记录会
+     * 被计入 total，导致末页出现空列表、页码数偏大。
+     *
      * @param page 页码，从 1 起（与 SellerService.history 的口径一致）
      */
     public Map<String, Object> history(String token, Integer page) {
         Buyer buyer = requireAuth(token);
         int cur = page == null || page < 1 ? 1 : page;
-        Page<Intent> p = intentRepository.findByBuyerIdOrderBySubmittedAtDescIdDesc(
-                buyer.getId(), PageRequest.of(cur - 1, historyPageSize));
+        Page<Intent> p = intentRepository.findByBuyerIdAndStatusNotOrderBySubmittedAtDescIdDesc(
+                buyer.getId(), Intent.Status.ARCHIVED, PageRequest.of(cur - 1, historyPageSize));
 
         List<Map<String, Object>> items = new ArrayList<>();
         for (Intent it : p.getContent()) {
-            if (it.getStatus() == Intent.Status.ARCHIVED) {
-                continue; // 旧系统归档数据不进入买家历史（A.2.4-3）
-            }
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("intentId", it.getId());
             m.put("productId", it.getProductId());
@@ -234,9 +235,13 @@ public class BuyerService {
     }
 
     /**
-     * 交易时间：意向本身暂无成交时间字段（entity 归陈星宇），
-     * 现取所属商品的下架时间 closedAt 作为成交/结束时间；商品仍在售或仍无结果时为 null。
-     * TODO: Intent 增加 dealtAt 字段后改读该字段，需由陈星宇在 C-1 后续补列。
+     * 交易时间（PR #2 评审意见第 2 条，口径已与陈星宇对齐）：
+     * <b>本方法为临时实现</b>——{@code Intent} 暂无成交时间列，现取所属商品的下架时间
+     * {@code Product.closedAt} 作为成交 / 结束时间；排队中、交易中一律为 null。
+     *
+     * <p><b>TODO（等陈星宇 C-1 落地后由我改）</b>：给 {@code Intent} 增加 {@code dealtAt}
+     * 字段并在标记交易结果时写入，届时本方法直接返回 {@code intent.getDealtAt()}，
+     * 不再回查商品，也不再依赖 {@code closedAt}。
      */
     private LocalDateTime dealTime(Intent intent) {
         if (intent.getStatus() == Intent.Status.QUEUED || intent.getStatus() == Intent.Status.IN_TRANSACTION) {
