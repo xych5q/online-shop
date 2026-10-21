@@ -48,6 +48,14 @@ public interface IntentRepository extends JpaRepository<Intent, Long> {
     long countByBuyerId(Long buyerId);
 
     /**
+     * 买家侧「我的历史」分页（A.2.2），<b>在查询层排除 ARCHIVED</b>（董嘉润 2026-10-21 补，
+     * 依据 PR #2 评审意见：归档数据不要查出来再 continue，否则会把它们计入分页 total）。
+     * ARCHIVED 为旧系统遗留只读数据（A.2.4-3 B 方案，不挂账号、不复活队列），买家侧不展示。
+     */
+    Page<Intent> findByBuyerIdAndStatusNotOrderBySubmittedAtDescIdDesc(
+            Long buyerId, Intent.Status status, Pageable pageable);
+
+    /**
      * 卖家侧「按商品看意向购买人」（A.2.3-4 两个维度之一）：
      * 某商品下的全部意向，按提交时间正序，含状态。
      */
