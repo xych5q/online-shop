@@ -1,7 +1,9 @@
 package com.group1.onlineshop;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.group1.onlineshop.entity.Category;
 import com.group1.onlineshop.entity.Product;
+import com.group1.onlineshop.repository.CategoryRepository;
 import com.group1.onlineshop.repository.IntentRepository;
 import com.group1.onlineshop.repository.ProductRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,11 +50,26 @@ class BuyerApiTest {
     @Autowired
     private IntentRepository intentRepository;
 
+    @Autowired
+    private CategoryRepository categoryRepository;
+
+    /** 发布用例共用的二级类别 id（多商品发布要求商品必挂二级类别） */
+    private Long categoryId;
+
     /** 每个用例前清空业务数据（H2 文件库跨测试持久化，必须清理；seller 账号由 DataInitializer 维护，不动） */
     @BeforeEach
     void cleanUp() {
         intentRepository.deleteAll();
         productRepository.deleteAll();
+        categoryRepository.deleteAll();
+        Category root = new Category();
+        root.setName("测试分类");
+        root.setParentId(null);
+        root = categoryRepository.save(root);
+        Category child = new Category();
+        child.setName("测试子类");
+        child.setParentId(root.getId());
+        categoryId = categoryRepository.save(child).getId();
     }
 
     /** 用例 1：错误密码登录返回 401「用户名或密码错误」。 */
@@ -73,7 +90,7 @@ class BuyerApiTest {
                 .andExpect(jsonPath("$.error").value("未登录或登录已失效"));
     }
 
-    /** 用例 3：发布价格为 -1 的商品返回 400「价格必须为大于 0 的数字」。 */
+    /** 用例 3：发布价格为 -1 的商品返回 400「价格必须为大于 0 的数字」（多商品发布：DTO 注解校验拦截）。 */
     @Test
     void 发布负价格商品返回400() throws Exception {
         String token = login();
@@ -82,7 +99,7 @@ class BuyerApiTest {
                 .andExpect(jsonPath("$.error").value("价格必须为大于 0 的数字"));
     }
 
-    /** 用例 4：发布成功且价格保留两位小数（接口返回 19.90、数据库存 19.90）。 */
+    /** 用例 4：发布成功且价格保留两位小数（接口返回 19.90、数据库存 19.90）。多商品发布下图片可不传。 */
     @Test
     void 发布成功且价格保留两位小数() throws Exception {
         String token = login();
@@ -99,14 +116,14 @@ class BuyerApiTest {
                 .andExpect(content().string(containsString("\"price\":19.90")));
     }
 
-    /** 用例 5：已有在售商品时再次发布返回 400「已有商品在售或交易中，需先下架」。 */
+    /** 用例 5（改）：多商品发布——已有在售商品时再次发布成功 200（A.1.1-1 取消「一次只能卖一件」单品约束）。 */
     @Test
-    void 已有在售商品再次发布返回400() throws Exception {
+    void 已有在售商品再次发布成功() throws Exception {
         String token = login();
         publish(token, "商品A", "19.9").andExpect(status().isOk());
         publish(token, "商品B", "29.9")
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("已有商品在售或交易中，需先下架"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true));
     }
 
     /** 用例 6：三个买家依次入队，位次分别为 1、2、3。 */
@@ -222,12 +239,13 @@ class BuyerApiTest {
         return objectMapper.readTree(result.getResponse().getContentAsString()).get("token").asText();
     }
 
-    /** 以卖家身份发布商品（返回 ResultActions 便于继续断言） */
+    /** 以卖家身份发布商品（返回 ResultActions 便于继续断言）。多商品发布契约：必挂二级类别，图片可不传。 */
     private ResultActions publish(String token, String name, String price) throws Exception {
         return mockMvc.perform(post("/api/seller/products")
                 .header("X-Token", token)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"name\":\"" + name + "\",\"description\":\"测试描述\",\"price\":" + price + "}"));
+                .content("{\"name\":\"" + name + "\",\"description\":\"测试描述\",\"price\":" + price
+                        + ",\"categoryId\":" + categoryId + ",\"stock\":5}"));
     }
 
     /** 直接落库一个在售商品（买家侧用例的测试数据准备） */

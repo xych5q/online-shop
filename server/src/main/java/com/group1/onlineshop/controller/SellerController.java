@@ -1,8 +1,10 @@
 package com.group1.onlineshop.controller;
 
+import com.group1.onlineshop.dto.ProductPublishRequest;
 import com.group1.onlineshop.service.ProductService;
 import com.group1.onlineshop.service.SellerService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -55,12 +57,15 @@ public class SellerController {
     }
 
     /**
-     * 发布商品：入参 {name,description,price,image?}，image 为 data:image/(jpeg|png);base64,... 字符串。
-     * 规则：已有在售或交易中商品 400「已有商品在售或交易中，需先下架」；name 必填且 ≤100 字；description ≤2000 字；
-     * price >0 且保留两位小数；图片解码存 app.upload.dir，只把文件名存进 Product.image；发布后状态直接为在售。
+     * 发布商品（多商品发布接口）：入参为 ProductPublishRequest DTO（@Valid 触发注解校验）。
+     * 校验规则：类别必填（@NotNull categoryId，服务层再验存在且为二级类别）；库存 ≥1（@Min(1)，0/负数拦截）；
+     * 图片可选、最多 9 张（@Size(max=9)）；richDescription 富文本 ≤8000 字；名称必填 ≤100 字；价格 >0。
+     * 校验失败由全局异常处理器统一返回 400 + 第一条错误文案；
+     * 允许多商品并存（已取消「已有商品在售或交易中，需先下架」限制，A.1.1-1）。
      */
     @PostMapping("/api/seller/products")
-    public Map<String, Object> publish(HttpServletRequest request, @RequestBody Map<String, Object> body) {
+    public Map<String, Object> publish(HttpServletRequest request,
+                                       @Valid @RequestBody ProductPublishRequest body) {
         requireAuth(request);
         return productService.publish(body);
     }
