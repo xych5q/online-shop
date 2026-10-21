@@ -113,6 +113,7 @@ class TradeFlowTest {
 
         assertEquals(Intent.Status.FAILED, intent(id1).getStatus());
         assertFalse(intent(id1).isDisposed()); // 待卖家处置
+        assertNotNull(intent(id1).getDealtAt()); // 失败也要写交易结束时间（买家历史要显示「何时失败」）
         assertEquals(Intent.Status.IN_TRANSACTION, intent(id2).getStatus()); // 自动递补，无需卖家点击
         Product reloaded = productRepository.findById(product.getId()).orElseThrow();
         assertEquals(Product.Status.FROZEN, reloaded.getStatus());
@@ -166,6 +167,8 @@ class TradeFlowTest {
 
         assertEquals(Intent.Status.SUCCESS, intent(id1).getStatus());
         assertTrue(intent(id1).isDisposed());
+        assertNotNull(intent(id1).getDealtAt()); // 交易时间写在意向自身，成交不下架时商品 closedAt 为 null
+        assertNull(productRepository.findById(product.getId()).orElseThrow().getClosedAt()); // 成交≠下架
         // 关键：队列不清空，下一位自动进入下一笔交易（而不是被清成失败）
         assertEquals(Intent.Status.IN_TRANSACTION, intent(id2).getStatus());
         Product reloaded = productRepository.findById(product.getId()).orElseThrow();

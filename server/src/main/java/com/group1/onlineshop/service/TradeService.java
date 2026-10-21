@@ -90,6 +90,9 @@ public class TradeService {
      * 队列有人 → 下一位自动递补（商品保持 {@code FROZEN/auto}，{@code frozenAt} 刷新）；
      * 队列空 → 商品回 {@code ON_SALE} 并清空 {@code frozenBy}/{@code frozenAt}。
      *
+     * <p>成功与失败都写入 {@code dealtAt = now}（A.2.2-2「交易时间」）——成交不再等于下架，
+     * 不能再用商品 {@code closedAt} 充当交易时间，买家历史的时间取自意向自身。
+     *
      * @param product 目标商品
      * @param result  {@code success} / {@code fail}，其他值 400「参数错误」
      * @throws BizException 无进行中交易 → 400「当前没有进行中的交易」
@@ -103,6 +106,7 @@ public class TradeService {
         if ("success".equals(result)) {
             deal.setStatus(Intent.Status.SUCCESS);
             deal.setDisposed(true);
+            deal.setDealtAt(LocalDateTime.now()); // A.2.2-2：交易时间写在意向自身，不取商品下架时间
             intentRepository.save(deal);
 
             int left = (product.getStock() == null ? 0 : product.getStock()) - 1;
@@ -135,6 +139,7 @@ public class TradeService {
         if ("fail".equals(result)) {
             deal.setStatus(Intent.Status.FAILED);
             deal.setDisposed(false);
+            deal.setDealtAt(LocalDateTime.now()); // 失败同样有交易结束时间，买家历史要显示「何时失败」
             intentRepository.save(deal);
             List<Intent> queue = queue(product.getId());
             if (!queue.isEmpty()) {
