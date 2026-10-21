@@ -5,6 +5,7 @@ import com.group1.onlineshop.entity.Product;
 import com.group1.onlineshop.entity.Seller;
 import com.group1.onlineshop.exception.BizException;
 import com.group1.onlineshop.repository.IntentRepository;
+import com.group1.onlineshop.repository.ProductImageRepository;
 import com.group1.onlineshop.repository.ProductRepository;
 import com.group1.onlineshop.repository.SellerRepository;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +33,7 @@ public class SellerService {
     private final SellerRepository sellerRepository;
     private final ProductRepository productRepository;
     private final IntentRepository intentRepository;
+    private final ProductImageRepository productImageRepository;
 
     /** BCrypt 编码器：登录校验与修改密码后重新编码（BCrypt 自带随机盐） */
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -245,14 +247,19 @@ public class SellerService {
         return m;
     }
 
-    /** 商品对外展示字段（与买家侧 /api/product 保持一致） */
+    /** 商品对外展示字段（与买家侧 /api/product 保持一致，多商品迭代后增加类别/库存/富文本/图片列表） */
     private Map<String, Object> publicProduct(Product p) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", p.getId());
         m.put("name", p.getName());
+        m.put("categoryId", p.getCategoryId());
         m.put("description", p.getDescription());
+        m.put("richDescription", p.getRichDescription());
         m.put("price", p.getPrice());
+        m.put("stock", p.getStock());
         m.put("imageUrl", p.getImage() == null ? null : "/uploads/" + p.getImage());
+        m.put("imageUrls", productImageRepository.findByProductIdOrderBySortOrderAscIdAsc(p.getId())
+                .stream().map(pi -> "/uploads/" + pi.getFilename()).toList());
         m.put("status", p.getStatus().name().toLowerCase());
         m.put("publishedAt", p.getCreatedAt());
         return m;

@@ -65,6 +65,9 @@ public class MigrationRunner implements CommandLineRunner {
                 .filter(p -> p.getStock() == null || p.getCategoryId() == null)
                 .toList();
 
+        // 1) 归档类别：属于系统基础设施（多商品发布必须挂二级类别），无论有无旧数据都先确保存在
+        Category archiveChild = ensureArchiveCategory();
+
         if (legacyIntents.isEmpty() && productsNeedBackfill.isEmpty()) {
             log.info("[迁移] 未检测到旧数据，跳过");
             return;
@@ -72,9 +75,6 @@ public class MigrationRunner implements CommandLineRunner {
 
         log.info("[迁移] 检测到旧数据：{} 条口令码意向、{} 件需回填的商品，按 B 方案只读归档",
                 legacyIntents.size(), productsNeedBackfill.size());
-
-        // 1) 归档类别
-        Category archiveChild = ensureArchiveCategory();
 
         // 2) 商品回填 + 归档
         int archivedProducts = 0;
