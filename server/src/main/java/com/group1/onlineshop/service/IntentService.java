@@ -1,8 +1,10 @@
 package com.group1.onlineshop.service;
 
+import com.group1.onlineshop.entity.Buyer;
 import com.group1.onlineshop.entity.Intent;
 import com.group1.onlineshop.entity.Product;
 import com.group1.onlineshop.exception.BizException;
+import com.group1.onlineshop.repository.BuyerRepository;
 import com.group1.onlineshop.repository.IntentRepository;
 import com.group1.onlineshop.repository.ProductImageRepository;
 import com.group1.onlineshop.repository.ProductRepository;
@@ -10,162 +12,141 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.security.SecureRandom;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 买家端服务：提交意向、口令码查询 / 修改 / 撤销、当前商品查询。
- * 业务规则逐条翻译自原型 prototype/single-seller-queue-trade/server.js（第 330~395 行买家接口）
- * 与 docs/design/接口设计.md，规则未做改动。
+ * 意向服务（队列与交易域；文件独占 owner 王振涛，见 .github/CODEOWNERS）。
+ *
+ * <p>迭代 2（挑战需求 A）口径：
+ * <ul>
+ *   <li><b>W-3 意向改绑账号</b>：提交意向必须登录态；{@code buyerId} 记当前账号，
+ *       {@code phone} 记账号电话<b>快照</b>（提交瞬间的电话，后续改账号不回改历史流水）；
+ *       {@code name} 停止写入（注册无姓名字段，A.2.1-10）；{@code code} 恒为 {@code null}（C6 口令码废弃）</li>
+ *   <li><b>FR-D7 / A.2.3-8</b>：同一账号对同一商品可重复提交，<b>无去重、无限次</b>，每条独立排队</li>
+ *   <li><b>FR-C3 / A.1.3-4</b>：库存<b>不限制排队人数</b>，库存为 0 才拒绝新意向</li>
+ *   <li><b>FR-C5 / A.1.3-2</b>：提交意向<b>不扣库存</b></li>
+ *   <li><b>A.2.2-6</b>：不返回排队位次（位次查询能力废弃且无替代入口）</li>
+ *   <li><b>已删除</b>：凭口令码的查询 / 改名 / 撤销三个接口（A.2.2-6 / A.2.4-2 / A.2.2-9）</li>
+ * </ul>
  */
 @Service
 @RequiredArgsConstructor
 public class IntentService {
 
-    /** 口令码字符集：8 位大写字母数字，剔除易混淆的 I / O / 0 / 1 */
-    private static final String CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-
-    /** 口令码长度 */
-    private static final int CODE_LENGTH = 8;
-
-    /** 口令码随机源 */
-    private static final SecureRandom RANDOM = new SecureRandom();
-
-    /** 生成尝试上限（32^8 的码空间下碰撞概率可忽略，上限仅为保险，与原型一致） */
-    private static final int CODE_MAX_ATTEMPTS = 100;
-
     private final IntentRepository intentRepository;
     private final ProductRepository productRepository;
     private final ProductImageRepository productImageRepository;
+    private final BuyerRepository buyerRepository;
     private final TradeService tradeService;
 
+    /** 队列明细每页条数（接口设计 v2 §1.2：商品列表 12 条、其余 10 条） */
+    private static final int QUEUE_PAGE_SIZE = 10;
+
     /**
-     * 提交购买意向。
-     * 业务规则：无在售或冻结商品 → 400「暂无商品在售」；
-     * 商品状态非在售 → 400「商品交易中，暂停接收新意向」；
-     * 姓名与电话去空格后任一为空 → 400「姓名与联系电话均为必填」；
-     * 生成全库唯一的 8 位口令码，创建排队中意向并返回口令码。
-     * 口令码只在此响应中返回一次，任何其他接口都不再返回。
+     * 提交购买意向（<b>登录态</b>，W-3）。
      *
-     * @param name  买家姓名
-     * @param phone 联系电话
-     * @return 8 位口令码
+     * <p>入参由控制器给出：{@code buyer} 为 {@code BuyerService.requireAuth(token)} 解析出的当前账号，
+     * {@code productId} 为目标商品（多商品场景必须指定，FR-C1）。
+     *
+     * <p>规则：商品不存在 → 400「商品不存在」；已下架 / 售罄 → 400「商品已下架」；
+     * 非在售（冻结 / 交易中）→ 400「商品交易中，暂停接收新意向」；库存为 0 → 400「商品已售罄」。
+     * 提交成功后，若该商品当前无进行中的交易，则由 {@link TradeService#enterDeal(Product)} 让队首自动进入交易（W-4）。
+     *
+     * @param buyer     当前登录买家（登录态由控制器保证）
+     * @param productId 目标商品 id
+     * @return {intent:{intentId,productId,status,submittedAt}}，<b>不含 code、不返回位次</b>
      */
     @Transactional
-    public String submit(String name, String phone) {
-        Product product = productRepository
-                .findFirstByStatusInOrderByCreatedAtAsc(List.of(Product.Status.ON_SALE, Product.Status.FROZEN))
-                .orElseThrow(() -> new BizException("暂无商品在售"));
+    public Map<String, Object> submit(Buyer buyer, Long productId) {
+        if (productId == null) {
+            throw new BizException("请选择要购买的商品");
+        }
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new BizException("商品不存在"));
+        if (product.getStatus() == Product.Status.OFF_SHELF || product.getStatus() == Product.Status.SOLD_OUT) {
+            throw new BizException("商品已下架");
+        }
         if (product.getStatus() != Product.Status.ON_SALE) {
             throw new BizException("商品交易中，暂停接收新意向");
         }
-        String n = name == null ? "" : name.trim();
-        String p = phone == null ? "" : phone.trim();
-        if (n.isEmpty() || p.isEmpty()) {
-            throw new BizException("姓名与联系电话均为必填");
+        if (product.getStock() == null || product.getStock() < 1) {
+            throw new BizException("商品已售罄");
         }
+
         Intent intent = new Intent();
         intent.setProductId(product.getId());
-        intent.setName(n);
-        intent.setPhone(p);
-        intent.setCode(generateUniqueCode());
+        intent.setBuyerId(buyer.getId());
+        intent.setPhone(buyer.getPhone()); // 账号电话快照
+        intent.setName(null);              // 无姓名字段（A.2.1-10）
+        intent.setCode(null);              // 口令码整体废弃（C6）
         intent.setSubmittedAt(LocalDateTime.now());
         intent.setStatus(Intent.Status.QUEUED);
         intent.setDisposed(false);
         intentRepository.save(intent);
-        return intent.getCode();
-    }
 
-    /**
-     * 凭口令码查询意向与位次。
-     * 业务规则：口令码不存在或对应意向已处终态（成功 / 撤销 / 失败）→ 404「口令码无效或已失效」；
-     * 已进入交易时 position 为 null、inTransaction 为 true；
-     * 返回 {intent:{name,phone,status,inTransaction,position,submittedAt}, product}，
-     * product 为商品公开信息（商品不存在时为 null），绝不包含口令码。
-     *
-     * @param code 口令码
-     * @return 意向与商品信息
-     */
-    @Transactional(readOnly = true)
-    public Map<String, Object> lookup(String code) {
-        Intent intent = findActiveByCode(code);
-        Product product = productRepository.findById(intent.getProductId()).orElse(null);
-        List<Intent> queue = intentRepository
-                .findByProductIdAndStatusOrderBySubmittedAtAscIdAsc(intent.getProductId(), Intent.Status.QUEUED);
-        int position = 0;
-        for (int i = 0; i < queue.size(); i++) {
-            if (queue.get(i).getId().equals(intent.getId())) {
-                position = i + 1;
-                break;
-            }
-        }
-        boolean inTransaction = intent.getStatus() == Intent.Status.IN_TRANSACTION;
-
-        Map<String, Object> intentJson = new LinkedHashMap<>();
-        intentJson.put("name", intent.getName());
-        intentJson.put("phone", intent.getPhone());
-        intentJson.put("status", intent.getStatus().name().toLowerCase());
-        intentJson.put("inTransaction", inTransaction);
-        intentJson.put("position", inTransaction ? null : position);
-        intentJson.put("submittedAt", intent.getSubmittedAt());
+        // ⚠️ W-4 挂起（2026-10-21）：「队首提交后立即自动进入交易」的触发时机存在需求冲突，待组长 / 需求方裁定后再补。
+        // 冲突：SRS 4.1 触发条件「在售且有排队意向 → 队首自动进交易」+「冻结期间不接收新意向」+ Q6 裁定「队列必须能形成」三者不可兼得
+        //      ——若提交即进交易并冻结，第二位之后买家被拒，队列最多 1 人，「排队是核心功能」失效。
+        // 挂起期间沿用迭代 1 现状：提交只入队，由卖家在后台触发首次进入交易；交易结束后由系统自动推进下一位（Q7 裁定，无争议）。
+        // 裁定后在此补：if (!tradeService.hasActiveDeal(product.getId())) { tradeService.enterDeal(product); }
 
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("intent", intentJson);
-        result.put("product", product == null ? null : publicProduct(product));
+        result.put("intent", intentJson(intent));
         return result;
     }
 
     /**
-     * 修改意向的姓名与电话。
-     * 业务规则：口令码无效或已失效 → 404；姓名与电话去空格后任一为空 → 400「姓名与联系电话均为必填」；
-     * 只更新姓名和电话，不修改 submittedAt，因此不改变排队位次。
+     * 某商品的队列明细（接口设计 v2 · T-2，供卖家后台按商品查看，L-2）。
      *
-     * @param code  口令码
-     * @param name  新姓名
-     * @param phone 新电话
+     * <p>出参 {product, queue[], currentDeal, pendingFailed[], page, totalPages, total}；
+     * {@code queue} 按 {@code submittedAt} 升序并带 {@code position}（从 1 起）；
+     * 展示的是买家<b>用户名</b>（无独立姓名字段）；<b>不含 code</b>。
+     *
+     * @param page 页码，从 1 起
      */
-    @Transactional
-    public void update(String code, String name, String phone) {
-        Intent intent = findActiveByCode(code);
-        String n = name == null ? "" : name.trim();
-        String p = phone == null ? "" : phone.trim();
-        if (n.isEmpty() || p.isEmpty()) {
-            throw new BizException("姓名与联系电话均为必填");
+    @Transactional(readOnly = true)
+    public Map<String, Object> queue(Long productId, Integer page) {
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new BizException("商品不存在", 404));
+
+        List<Intent> all = intentRepository
+                .findByProductIdAndStatusOrderBySubmittedAtAscIdAsc(productId, Intent.Status.QUEUED);
+        int cur = page == null || page < 1 ? 1 : page;
+        int totalPages = Math.max(1, (all.size() + QUEUE_PAGE_SIZE - 1) / QUEUE_PAGE_SIZE);
+        int from = Math.min((cur - 1) * QUEUE_PAGE_SIZE, Math.max(0, all.size() - 1));
+        int to = Math.min(from + QUEUE_PAGE_SIZE, all.size());
+        List<Intent> slice = all.isEmpty() ? List.of() : all.subList(from, to);
+
+        List<Map<String, Object>> queue = new ArrayList<>();
+        for (int i = from; i < to; i++) {
+            queue.add(queueItem(all.get(i), i + 1, false));
         }
-        intent.setName(n);
-        intent.setPhone(p);
-        intentRepository.save(intent);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("product", publicProduct(product));
+        result.put("queue", queue);
+        result.put("currentDeal", intentRepository
+                .findByProductIdAndStatus(productId, Intent.Status.IN_TRANSACTION)
+                .map(it -> queueItem(it, null, false)).orElse(null));
+        result.put("pendingFailed", intentRepository
+                .findByProductIdAndStatusAndDisposedFalseOrderBySubmittedAtAsc(productId, Intent.Status.FAILED)
+                .stream().map(it -> queueItem(it, null, true)).toList());
+        result.put("page", cur);
+        result.put("totalPages", totalPages);
+        result.put("total", all.size());
+        return result;
     }
 
     /**
-     * 撤销意向。
-     * 业务规则（对齐 SRS v1.3 FR-B5，2026-10-07 需求方拍板口径）：口令码无效或已失效 → 404；
-     * 交易中买家仍可撤销：交易终止，该意向置已撤销（终态，历史留痕）；
-     * 队列有人 → 下一位自动递补进入交易（商品保持冻结）；队列无人 → 商品自动恢复在售。
-     * 其余（排队中）状态直接置为已撤销。
+     * 买家侧当前商品（<b>基线遗留，过渡用</b>）。
      *
-     * @param code 口令码
-     */
-    @Transactional
-    public void cancel(String code) {
-        Intent intent = findActiveByCode(code);
-        if (intent.getStatus() == Intent.Status.IN_TRANSACTION) {
-            tradeService.abortDealByBuyer(intent);
-            return;
-        }
-        intent.setStatus(Intent.Status.CANCELLED);
-        intentRepository.save(intent);
-    }
-
-    /**
-     * 买家侧当前商品。
-     * 业务规则：只返回在售或已冻结的商品，无则返回 null（前端显示「暂无商品在售」）；
-     * 仅返回商品公开信息，绝不包含意向或口令码信息。
-     *
-     * @return 商品公开信息，无商品时为 null
+     * <p>迭代 2 已判定废弃：多商品场景由 {@code GET /api/products} 与 {@code GET /api/products/{id}}
+     * 承接（嵇宇锋 J-1）。因 {@code GET /api/product} 在董嘉润的 BuyerController 中仍在调用本方法，
+     * 故暂保留；待前端切换完成后由董嘉润删端点、我再删本方法。
      */
     @Transactional(readOnly = true)
     public Map<String, Object> activeProduct() {
@@ -175,35 +156,41 @@ public class IntentService {
                 .orElse(null);
     }
 
-    /** 凭口令码找到有效（未终态）的意向：口令码去空格转大写后查询，不存在或已处终态 → 404（与原型 findActiveByCode 一致） */
-    private Intent findActiveByCode(String code) {
-        String c = code == null ? "" : code.trim().toUpperCase();
-        Intent intent = intentRepository.findByCode(c)
-                .orElseThrow(() -> new BizException("口令码无效或已失效", 404));
-        if (intent.getStatus() == Intent.Status.SUCCESS
-                || intent.getStatus() == Intent.Status.CANCELLED
-                || intent.getStatus() == Intent.Status.FAILED) {
-            throw new BizException("口令码无效或已失效", 404);
-        }
-        return intent;
+    /** 意向对外字段：不含 code（口令码已废弃）、不含内部处置标记 */
+    private Map<String, Object> intentJson(Intent intent) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("intentId", intent.getId());
+        m.put("productId", intent.getProductId());
+        m.put("status", intent.getStatus().name().toLowerCase());
+        m.put("submittedAt", intent.getSubmittedAt());
+        return m;
     }
 
-    /** 生成全库唯一的 8 位口令码：从固定字符集随机取值，撞码则重新生成（与原型 genCode 一致） */
-    private String generateUniqueCode() {
-        for (int attempt = 0; attempt < CODE_MAX_ATTEMPTS; attempt++) {
-            StringBuilder sb = new StringBuilder(CODE_LENGTH);
-            for (int i = 0; i < CODE_LENGTH; i++) {
-                sb.append(CODE_ALPHABET.charAt(RANDOM.nextInt(CODE_ALPHABET.length())));
-            }
-            String code = sb.toString();
-            if (intentRepository.findByCode(code).isEmpty()) {
-                return code;
-            }
+    /** 卖家侧队列条目：position 为排队位次（当前交易/待处置传 null），showDisposed 时附带是否待处置 */
+    private Map<String, Object> queueItem(Intent intent, Integer position, boolean showDisposed) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("intentId", intent.getId());
+        m.put("position", position);
+        m.put("buyerId", intent.getBuyerId());
+        m.put("buyerName", buyerName(intent.getBuyerId()));
+        m.put("phone", intent.getPhone());
+        m.put("status", intent.getStatus().name().toLowerCase());
+        m.put("submittedAt", intent.getSubmittedAt());
+        if (showDisposed) {
+            m.put("disposed", intent.isDisposed());
         }
-        throw new BizException("口令码生成失败，请重试", 500);
+        return m;
     }
 
-    /** 商品对外展示字段（与原型 publicProduct、卖家侧 /api/product 保持一致，多商品迭代后增加类别/库存/富文本/图片列表） */
+    /** 买家用户名；账号不存在或旧数据无账号时给空串 */
+    private String buyerName(Long buyerId) {
+        if (buyerId == null) {
+            return "";
+        }
+        return buyerRepository.findById(buyerId).map(Buyer::getUsername).orElse("");
+    }
+
+    /** 商品对外展示字段（多商品：类别 / 库存 / 富文本 / 多图） */
     private Map<String, Object> publicProduct(Product p) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", p.getId());

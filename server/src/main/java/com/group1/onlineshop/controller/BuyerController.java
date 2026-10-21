@@ -5,9 +5,7 @@ import com.group1.onlineshop.service.IntentService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -61,43 +59,12 @@ public class BuyerController {
         return result;
     }
 
-    /**
-     * 提交购买意向（<b>基线遗留，待 W-3 迁移</b>）。
-     * 入参 {name,phone}；迭代 2 起改为登录态 + {productId}，由王振涛的 {@code IntentController} 承接，
-     * 届时本方法连同三个凭码接口一并删除。此处不做改动，以免与其分支重复映射。
-     */
-    @PostMapping("/api/intents")
-    public Map<String, Object> submit(@RequestBody Map<String, Object> body) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("code", intentService.submit(str(body.get("name")), str(body.get("phone"))));
-        return result;
-    }
-
-    /**
-     * 凭口令码查询位次与状态（<b>基线遗留，C6 已废止，待 W-3 删除</b>）。
-     */
-    @GetMapping("/api/intents/lookup/{code}")
-    public Map<String, Object> lookup(@PathVariable String code) {
-        return intentService.lookup(code);
-    }
-
-    /**
-     * 凭口令码修改姓名与电话（<b>基线遗留，A.2.4-2 已废止，待 W-3 删除</b>）。
-     */
-    @PutMapping("/api/intents/lookup/{code}")
-    public Map<String, Object> update(@PathVariable String code, @RequestBody Map<String, Object> body) {
-        intentService.update(code, str(body.get("name")), str(body.get("phone")));
-        return ok();
-    }
-
-    /**
-     * 凭口令码撤销意向（<b>基线遗留，A.2.2-9 已废止，待 W-3 删除</b>）。
-     */
-    @PostMapping("/api/intents/lookup/{code}/cancel")
-    public Map<String, Object> cancel(@PathVariable String code) {
-        intentService.cancel(code);
-        return ok();
-    }
+    // W-3（王振涛）：以下 4 个基线遗留端点已删除——
+    //   POST /api/intents                     → 迁入 IntentController（登录态 + {productId}）
+    //   GET  /api/intents/lookup/{code}       → 口令码机制废弃（C6 / A.2.2-6）
+    //   PUT  /api/intents/lookup/{code}       → 同上（A.2.4-2）
+    //   POST /api/intents/lookup/{code}/cancel→ 买家无取消入口（A.2.2-9）
+    // 删除依据见接口设计 v2 §0.1，端点迁移后 IntentService 的对应方法同步移除。
 
     /**
      * 买家注册（FR-D1）。
