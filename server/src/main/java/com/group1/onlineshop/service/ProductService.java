@@ -1,9 +1,14 @@
 package com.group1.onlineshop.service;
 
+import com.group1.onlineshop.dto.ProductPublishRequest;
+import com.group1.onlineshop.entity.Category;
 import com.group1.onlineshop.entity.Intent;
 import com.group1.onlineshop.entity.Product;
+import com.group1.onlineshop.entity.ProductImage;
 import com.group1.onlineshop.exception.BizException;
+import com.group1.onlineshop.repository.CategoryRepository;
 import com.group1.onlineshop.repository.IntentRepository;
+import com.group1.onlineshop.repository.ProductImageRepository;
 import com.group1.onlineshop.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -15,6 +20,7 @@ import java.math.RoundingMode;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,7 +31,8 @@ import java.util.regex.Pattern;
 
 /**
  * 商品服务：发布、冻结/解冻、进入交易、标记交易结果、手动下架、失败意向处置。
- * 业务规则逐条翻译自原型 prototype/single-seller-queue-trade/server.js 与 docs/design/接口设计.md，规则未做改动。
+ * 发布接口按「多商品发布」需求实现（类别/库存/多图/富文本描述，见 publish 方法注释），
+ * 其余交易规则逐条翻译自原型 prototype/single-seller-queue-trade/server.js 与 docs/design/接口设计.md，规则未做改动。
  */
 @Service
 @RequiredArgsConstructor
@@ -33,6 +40,8 @@ public class ProductService {
 
     private final ProductRepository productRepository;
     private final IntentRepository intentRepository;
+    private final CategoryRepository categoryRepository;
+    private final ProductImageRepository productImageRepository;
     private final TradeService tradeService;
 
     /** 上传目录（application.yml: app.upload.dir = ./data/uploads） */
@@ -50,49 +59,90 @@ public class ProductService {
     private static final int MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
     /**
-     * 发布商品。
-     * 业务规则：已有在售或冻结商品 → 400「已有商品在售或交易中，需先下架」；
-     * name 去空格后必填且 ≤100 字；description ≤2000 字；price 必须为 >0 的数字且保留两位小数（BigDecimal HALF_UP）；
-     * image 可选，仅支持 data:image/(jpeg|png);base64,... 且 ≤5MB，解码后存到 app.upload.dir，只把文件名存进 Product.image；
-     * 发布成功后商品状态直接为在售（无独立「上架」动作）；商品发布后不可修改。
+     * 发布商品（多商品发布接口，对齐挑战需求 A 数据模型）。
+     * 业务规则（需求迭代）：
+     *   1. 类别必填：categoryId 缺失 → 400「商品类别必填」；类别不存在 → 400「类别不存在」；
+     *      一级类别不可挂商品（A.1.2-2 必挂二级）→ 400「商品必须挂到二级类别」；
+     *   2. 库存校验：stock 必须 ≥1（0 或负数）→ 400「库存必须大于或等于 1」；
+     *   3. 多图限制：images 可选（不传时前端显示占位图），传入时 ≤9 张 → 400「图片数量不能超过 9 张」；
+     *   4. 富文本描述：richDescription 支持 HTML/Markdown 长文本，≤8000 字（description 简要 ≤2000 字）；
+     *   5. 其余沿用原规则：name 去空格后必填且 ≤100 字；price 必须 >0 且保留两位小数（HALF_UP）；
+     *   6. 取消「同一时间只允许一件在售商品」限制，允许多商品并存（A.1.1-1）；
+     *   7. 图片沿用 data:image/(jpeg|png);base64 约定（单张 ≤5MB），解码落盘，
+     *      文件名逐条写入 product_image 表（sortOrder 从 0 起，最小者为主图，与迁移脚本约定一致），
+     *      并把主图文件名写入 Product.image 兼容旧展示字段；
+     * 发布成功后商品状态直接为在售（无独立「上架」动作）；商品发布后不可修改（A.1.1-3）。
+     *
+     * DTO 注解校验失败时由 GlobalExceptionHandler 先行拦截（400 + 第一条错误文案），
+     * 本方法内的校验为服务层二次防御（绕过 DTO 直接调用时同样生效）。
      */
-    public Map<String, Object> publish(Map<String, Object> body) {
-        if (productRepository.existsByStatusIn(List.of(Product.Status.ON_SALE, Product.Status.FROZEN))) {
-            throw new BizException("已有商品在售或交易中，需先下架");
-        }
-        String name = str(body.get("name")).trim();
-        String description = str(body.get("description")).trim();
-        BigDecimal price;
-        try {
-            price = body.get("price") == null ? null
-                    : new BigDecimal(str(body.get("price"))).setScale(2, RoundingMode.HALF_UP);
-        } catch (NumberFormatException e) {
-            price = null;
-        }
+    public Map<String, Object> publish(ProductPublishRequest req) {
+        String name = req.getName() == null ? "" : req.getName().trim();
+        Long categoryId = req.getCategoryId();
+        String description = req.getDescription() == null ? "" : req.getDescription().trim();
+        String richDescription = req.getRichDescription() == null ? "" : req.getRichDescription().trim();
+        BigDecimal price = req.getPrice() == null ? null
+                : req.getPrice().setScale(2, RoundingMode.HALF_UP);
+        Integer stock = req.getStock();
+        List<String> images = req.getImages();
+
+        // —— 服务层核心校验（与 DTO 注解规则一致，双保险）——
         if (name.isEmpty()) {
             throw new BizException("商品名称必填");
         }
         if (name.length() > 100) {
             throw new BizException("商品名称不能超过 100 字");
         }
+        if (categoryId == null) {
+            throw new BizException("商品类别必填");
+        }
+        Category category = categoryRepository.findById(categoryId)
+                .orElseThrow(() -> new BizException("类别不存在"));
+        if (category.getParentId() == null) {
+            throw new BizException("商品必须挂到二级类别");
+        }
         if (description.length() > 2000) {
             throw new BizException("商品描述不能超过 2000 字");
+        }
+        if (richDescription.length() > 8000) {
+            throw new BizException("商品详情不能超过 8000 字");
         }
         if (price == null || price.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BizException("价格必须为大于 0 的数字");
         }
-        String image = null;
-        if (body.get("image") != null) {
-            image = saveImage(str(body.get("image")));
+        if (stock == null || stock < 1) {
+            throw new BizException("库存必须大于或等于 1");
+        }
+        if (images != null && images.size() > 9) {
+            throw new BizException("图片数量不能超过 9 张");
         }
 
         Product product = new Product();
         product.setName(name);
+        product.setCategoryId(categoryId);
         product.setDescription(description);
+        product.setRichDescription(richDescription);
         product.setPrice(price);
-        product.setImage(image);
+        product.setStock(stock);
         product.setStatus(Product.Status.ON_SALE);
         productRepository.save(product);
+
+        // 逐张保存图片并写入 product_image（sortOrder 从 0 开始，最小者即主图）；
+        // 图片可整组省略（images 为空），此时不写图片记录、Product.image 保持空，前端显示占位图
+        if (images != null && !images.isEmpty()) {
+            List<ProductImage> imageList = new ArrayList<>();
+            for (int i = 0; i < images.size(); i++) {
+                ProductImage pi = new ProductImage();
+                pi.setProductId(product.getId());
+                pi.setFilename(saveImage(images.get(i)));
+                pi.setSortOrder(i);
+                imageList.add(pi);
+            }
+            productImageRepository.saveAll(imageList);
+            // 兼容旧展示字段：主图文件名写入 Product.image
+            product.setImage(imageList.get(0).getFilename());
+            productRepository.save(product);
+        }
         return ok();
     }
 
@@ -227,14 +277,19 @@ public class ProductService {
                 .orElse(null);
     }
 
-    /** 商品对外展示字段（与原型 publicProduct 一致） */
+    /** 商品对外展示字段（多商品迭代后增加类别/库存/富文本/图片列表） */
     private Map<String, Object> publicProduct(Product p) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", p.getId());
         m.put("name", p.getName());
+        m.put("categoryId", p.getCategoryId());
         m.put("description", p.getDescription());
+        m.put("richDescription", p.getRichDescription());
         m.put("price", p.getPrice());
+        m.put("stock", p.getStock());
         m.put("imageUrl", p.getImage() == null ? null : "/uploads/" + p.getImage());
+        m.put("imageUrls", productImageRepository.findByProductIdOrderBySortOrderAscIdAsc(p.getId())
+                .stream().map(pi -> "/uploads/" + pi.getFilename()).toList());
         m.put("status", p.getStatus().name().toLowerCase());
         m.put("publishedAt", p.getCreatedAt());
         return m;
@@ -280,11 +335,6 @@ public class ProductService {
             throw new BizException("服务器内部错误", 500);
         }
         return name;
-    }
-
-    /** null 安全的字符串转换 */
-    private static String str(Object o) {
-        return o == null ? "" : String.valueOf(o);
     }
 
     /** 统一成功返回 {ok: true} */
