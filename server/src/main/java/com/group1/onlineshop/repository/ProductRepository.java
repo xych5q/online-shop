@@ -3,7 +3,9 @@ package com.group1.onlineshop.repository;
 import com.group1.onlineshop.entity.Product;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import java.util.List;
@@ -17,8 +19,13 @@ import java.util.Optional;
  * 仅供仍需「当前商品」语义的旧页面使用；新代码应改用按状态列表 / 类别 / 关键词查询。
  *
  * <p>方法兼容说明：原有 4 个方法一个未删。
+ *
+ * <p><b>动态查询</b>：继承 {@link JpaSpecificationExecutor} 以支持
+ * {@code findAll(Specification, Pageable)}。浏览与搜索域（J-1）的关键词 + 类别组合筛选
+ * 用 Specification 拼条件更清晰，且「选一级类别时含其全部二级」这类动态集合条件
+ * 用 {@code @Query} 写会很难维护。其它域若要组合筛选也可直接复用。
  */
-public interface ProductRepository extends JpaRepository<Product, Long> {
+public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpecificationExecutor<Product> {
 
     // ── 原有方法（基线遗留，保留不动） ─────────────────────────────────────
 
