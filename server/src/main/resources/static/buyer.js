@@ -209,3 +209,160 @@ $('#codeDone').addEventListener('click', () => {
 
 loadProduct();
 setInterval(loadProduct, 10000);
+
+/* ---------- 商品列表（US-16 / J-2）：依赖 GET /api/products、GET /api/categories/tree ---------- */
+const listState = { keyword: '', categoryId: null, page: 1, pageSize: 12, totalPages: 0 };
+
+let categoryTree = [];
+
+function cardPlaceholder() {
+  return '<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#b8c1d4" stroke-width="1.4"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="M3.5 18l5-5 3.5 3.5L16 12l4.5 4.5"/></svg>';
+}
+
+function renderCard(p) {
+  const frozen = p.status === 'frozen';
+  const pic = p.imageUrl
+    ? `<img src="${esc(p.imageUrl)}" alt="${esc(p.name)}" loading="lazy">`
+    : cardPlaceholder();
+  const badge = frozen
+    ? '<span class="badge frozen">商品交易中</span>'
+    : '<span class="badge on">在售中</span>';
+  return `
+    <div class="pcard" data-id="${esc(p.id)}" title="${esc(p.name)}">
+      <div class="pic">${pic}</div>
+      <div class="body">
+        <div class="name">${esc(p.name)}</div>
+        <div class="prow">${badge}<span class="cat">${esc(p.categoryName || '未分类')}</span></div>
+        <div class="prow">
+          <span class="price"><small>￥</small>${fmtPrice(p.price)}</span>
+          <span class="time">${fmtTime(p.publishedAt)}</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function loadCategories() {
+  try {
+    const data = await api('/api/categories/tree');
+    categoryTree = (data.categories || []).map((c) => ({
+      id: c.id,
+      name: c.name,
+      children: (c.children || []).map((k) => ({ id: k.id, name: k.name })),
+    }));
+    $('#cat1').innerHTML =
+      '<option value="">全部一级类别</option>' +
+      categoryTree.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+}
+
+/* 一级变化时重建二级下拉：选一级则不传二级，由后端展开其下全部二级（FR-C8） */
+function fillSecondLevel() {
+  const first = $('#cat1').value;
+  const node = categoryTree.find((c) => String(c.id) === String(first));
+  const kids = node ? node.children : [];
+  $('#cat2').innerHTML =
+    '<option value="">全部二级类别</option>' +
+    kids.map((k) => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('');
+  $('#cat2').disabled = !first || kids.length === 0;
+}
+
+/* 页码序列：首尾固定，当前页左右各 2 页，间隔用省略号 */
+function pageSeq(cur, total) {
+  const keep = new Set([1, total]);
+  for (let i = cur - 2; i <= cur + 2; i++) if (i >= 1 && i <= total) keep.add(i);
+  const nums = Array.from(keep).sort((a, b) => a - b);
+  const out = [];
+  nums.forEach((n, i) => {
+    if (i && n - nums[i - 1] > 1) out.push('...');
+    out.push(n);
+  });
+  return out;
+}
+
+function renderPager() {
+  const box = $('#pager');
+  const { page, totalPages } = listState;
+  if (!totalPages || totalPages <= 1) {
+    box.innerHTML = '';
+    return;
+  }
+  box.innerHTML = `
+    <button class="page-btn" data-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>上一页</button>
+    ${pageSeq(page, totalPages)
+      .map((n) => (n === '...'
+        ? '<span class="page-gap">…</span>'
+        : `<button class="page-btn${n === page ? ' active' : ''}" data-page="${n}">${n}</button>`))
+      .join('')}
+    <button class="page-btn" data-page="${page + 1}" ${page >= totalPages ? 'disabled' : ''}>下一页</button>
+  `;
+}
+
+async function loadList() {
+  const q = new URLSearchParams();
+  if (listState.keyword) q.set('keyword', listState.keyword);
+  if (listState.categoryId) q.set('categoryId', listState.categoryId);
+  q.set('page', listState.page);
+  q.set('pageSize', listState.pageSize);
+  try {
+    const data = await api('/api/products?' + q.toString());
+    listState.totalPages = data.totalPages || 0;
+    /* 展示层过滤：冻结中（含交易中）商品不进列表（US-16 验收判据）；后端仍返回，仅在此处剔除 */
+    const items = (data.items || []).filter((p) => p.status !== 'frozen');
+    const grid = $('#productGrid');
+    if (!items.length) {
+      grid.innerHTML = '';
+      $('#listEmpty').style.display = 'block';
+    } else {
+      $('#listEmpty').style.display = 'none';
+      grid.innerHTML = items.map(renderCard).join('');
+    }
+    renderPager();
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+}
+
+function backToFirstPage() {
+  listState.page = 1;
+}
+
+$('#searchBtn').addEventListener('click', () => {
+  listState.keyword = $('#searchInput').value.trim();
+  backToFirstPage();
+  loadList();
+});
+$('#searchInput').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  listState.keyword = $('#searchInput').value.trim();
+  backToFirstPage();
+  loadList();
+});
+$('#cat1').addEventListener('change', () => {
+  fillSecondLevel();
+  listState.categoryId = $('#cat1').value ? Number($('#cat1').value) : null;
+  backToFirstPage();
+  loadList();
+});
+$('#cat2').addEventListener('change', () => {
+  const second = $('#cat2').value;
+  listState.categoryId = second ? Number(second) : ($('#cat1').value ? Number($('#cat1').value) : null);
+  backToFirstPage();
+  loadList();
+});
+$('#pager').addEventListener('click', (e) => {
+  const btn = e.target.closest('.page-btn');
+  if (!btn || btn.disabled) return;
+  listState.page = Number(btn.dataset.page);
+  loadList();
+});
+$('#productGrid').addEventListener('click', (e) => {
+  const card = e.target.closest('.pcard');
+  if (card) location.href = '/product.html?id=' + encodeURIComponent(card.dataset.id);
+});
+
+fillSecondLevel();
+loadCategories();
+loadList();

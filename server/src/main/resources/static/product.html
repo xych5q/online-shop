@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>好物排队购 —— 商品详情</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="container">
+  <div class="topbar">
+    <div>
+      <h1>好物排队购</h1>
+      <div class="sub">先到先得 · 线下当面交易</div>
+    </div>
+    <a href="/">← 返回列表</a>
+  </div>
+
+  <!-- 商品详情（US-17 / J-3）：主图取第一张、缩略图切换、无图占位 -->
+  <div class="card" id="detailCard">
+    <div id="detailArea"><div class="empty">加载中…</div></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/product.js"></script>
+</body>
+</html>

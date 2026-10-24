@@ -13,11 +13,34 @@
       <h1>好物排队购</h1>
       <div class="sub">先到先得 · 线下当面交易</div>
     </div>
-    <a href="/admin.html">卖家入口 →</a>
+    <div class="topbar-links">
+      <span id="topbarUser"></span>
+      <a href="/admin.html">卖家入口 →</a>
+    </div>
   </div>
 
-  <!-- 在售商品 -->
-  <div class="card" id="productCard">
+  <!-- 搜索与类别筛选（US-16 / J-2）：依赖 GET /api/products、GET /api/categories/tree -->
+  <div class="card" id="filterCard">
+    <div class="filter-bar">
+      <input type="text" id="searchInput" placeholder="搜索商品名称或描述，多个关键词用空格分隔" maxlength="100">
+      <button class="btn btn-primary" id="searchBtn">搜索</button>
+    </div>
+    <div class="filter-bar" style="margin-top:10px">
+      <select id="cat1"><option value="">全部一级类别</option></select>
+      <select id="cat2"><option value="">全部二级类别</option></select>
+    </div>
+  </div>
+
+  <!-- 商品列表（US-16 / J-2）：主图/占位图、名称、类别、价格、发布时间，按发布时间倒序 -->
+  <div class="card" id="listCard">
+    <div class="section-title">在售商品</div>
+    <div class="grid" id="productGrid"></div>
+    <div class="empty" id="listEmpty" style="display:none">没有找到相关商品</div>
+    <div class="pager" id="pager"></div>
+  </div>
+
+  <!-- 旧单商品区块：GET /api/product 已废弃，按约定暂不删除其调用，故保留隐藏容器 -->
+  <div class="card" id="productCard" hidden>
     <div id="productArea"></div>
   </div>
 
@@ -70,6 +93,7 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<script src="/auth.js"></script>
 <script src="/buyer.js"></script>
 </body>
 </html>

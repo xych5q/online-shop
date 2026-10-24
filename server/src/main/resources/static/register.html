@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>好物排队购 —— 买家注册</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="container">
+  <div class="auth-wrap">
+    <div class="auth-back"><a href="/">← 返回首页</a></div>
+
+    <div class="auth-card">
+      <div class="auth-title">注册买家账号</div>
+
+      <div class="form">
+        <div>
+          <label>用户名<span class="req">*</span></label>
+          <input type="text" id="regUser" maxlength="20" placeholder="jrdong" autocomplete="username">
+          <div class="hint" style="margin-top:6px">3-20 位字母、数字或下划线；唯一性忽略大小写</div>
+        </div>
+
+        <div>
+          <label>密码<span class="req">*</span></label>
+          <input type="password" id="regPass" maxlength="64" placeholder="请输入密码" autocomplete="new-password">
+          <div class="hint" style="margin-top:6px">≥8 位，且同时包含字母与数字</div>
+        </div>
+
+        <div>
+          <label>联系电话<span class="req">*</span></label>
+          <input type="text" id="regPhone" maxlength="30" placeholder="13800000000">
+        </div>
+
+        <div>
+          <label>确认联系电话（再次输入，防填错）<span class="req">*</span></label>
+          <input type="text" id="regPhone2" maxlength="30" placeholder="请再输入一次联系电话">
+        </div>
+
+        <div>
+          <label>默认交易地点（选填）</label>
+          <input type="text" id="regLocation" maxlength="200" placeholder="图书馆一楼">
+          <div class="hint" style="margin-top:6px">自由文本 ≤200 字，不参与任何交易校验</div>
+        </div>
+
+        <div class="check-row">
+          <input type="checkbox" id="regAgree">
+          <label for="regAgree" style="margin:0;font-weight:400;color:var(--text-2);font-size:13px">我已阅读并同意</label>
+          <button type="button" class="link-btn" id="openPrivacy">《隐私说明》</button>
+        </div>
+
+        <div class="error" id="regError"></div>
+
+        <button class="btn btn-primary btn-block" id="regSubmit" disabled>注册</button>
+      </div>
+
+      <div class="auth-foot">已有账号？<a href="/login.html">去登录</a></div>
+    </div>
+  </div>
+</div>
+
+<!-- 隐私说明：文案依据《需求规格说明书》「个人信息保护」一节 -->
+<div class="modal-mask" id="privacyMask">
+  <div class="modal">
+    <button class="close-x" data-close="privacyMask">×</button>
+    <h3>隐私说明</h3>
+    <div class="privacy">
+      <p>注册即表示你同意本说明。我们只在交易撮合所需的范围内使用你的信息。</p>
+      <div class="li">1. 收集的信息：用户名、联系电话、默认交易地点（选填）。</div>
+      <div class="li">2. 用途：仅用于交易撮合与售后联系，不用于其它目的。</div>
+      <div class="li">3. 卖家可见范围：仅限交易所需字段，不会看到与你交易无关的信息。</div>
+      <div class="li">4. 我们不会向任何第三方泄露你的个人信息。</div>
+      <div class="li">5. 本系统不提供修改资料、找回或重置密码、账号注销功能；如需处理，请联系卖家。</div>
+    </div>
+    <div class="divider"></div>
+    <div style="text-align:center">
+      <button class="btn btn-primary" id="privacyOk">我知道了</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/auth.js"></script>
+<script src="/register.js"></script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>好物排队购 —— 买家登录</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="container">
+  <div class="auth-wrap">
+    <div class="auth-back"><a href="/">← 返回首页</a></div>
+
+    <div class="auth-card">
+      <div class="auth-title">买家登录</div>
+
+      <!-- 未登录：登录表单 -->
+      <div class="form" id="loginForm">
+        <div>
+          <label>用户名<span class="req">*</span></label>
+          <input type="text" id="loginUser" maxlength="20" placeholder="请输入用户名" autocomplete="username">
+          <div class="hint" style="margin-top:6px">忽略大小写，大小写不同视为同一账号</div>
+        </div>
+
+        <div>
+          <label>密码<span class="req">*</span></label>
+          <input type="password" id="loginPass" maxlength="64" placeholder="请输入密码" autocomplete="current-password">
+        </div>
+
+        <div class="error" id="loginError"></div>
+
+        <button class="btn btn-primary btn-block" id="loginSubmit">登录</button>
+
+        <div class="auth-foot">还没有账号？<a href="/register.html">去注册</a></div>
+      </div>
+
+      <!-- 已登录：保持登录态（token 存 localStorage，刷新不掉线） -->
+      <div class="auth-done" id="loggedIn" style="display:none">
+        <div>你已登录</div>
+        <div class="who" id="loggedName"></div>
+        <div class="auth-foot" style="margin:10px 0 16px">
+          <a href="/">去首页挑选商品</a>
+        </div>
+        <button class="btn btn-outline" id="logoutBtn">退出登录</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/auth.js"></script>
+<script src="/login.js"></script>
+</body>
+</html>
