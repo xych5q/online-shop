@@ -59,7 +59,7 @@ public class SellerController {
     /**
      * 发布商品（多商品发布接口）：入参为 ProductPublishRequest DTO（@Valid 触发注解校验）。
      * 校验规则：类别必填（@NotNull categoryId，服务层再验存在且为二级类别）；库存 ≥1（@Min(1)，0/负数拦截）；
-     * 图片 1~9 张（@Size）；richDescription 富文本 ≤8000 字；名称必填 ≤100 字；价格 >0。
+     * 图片可选、最多 9 张（@Size(max=9)）；richDescription 富文本 ≤8000 字；名称必填 ≤100 字；价格 >0。
      * 校验失败由全局异常处理器统一返回 400 + 第一条错误文案；
      * 允许多商品并存（已取消「已有商品在售或交易中，需先下架」限制，A.1.1-1）。
      */

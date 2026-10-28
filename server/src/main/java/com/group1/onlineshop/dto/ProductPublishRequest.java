@@ -17,7 +17,7 @@ import java.util.List;
  * <ol>
  *   <li>类别必填（A.1.2-2）：categoryId 必须为已存在的<b>二级类别</b> id，缺失拦截；</li>
  *   <li>库存校验（A.1.3-1）：stock 必须 ≥1，传 0 或负数直接拦截；</li>
- *   <li>多图限制（A.1.5-2）：images 必须为 1~9 张；</li>
+ *   <li>多图限制（A.1.5-2 / A.1.5-4）：images 可选（不传显示占位图），传入时最多 9 张；</li>
  *   <li>富文本描述（A.1.5-1）：richDescription 支持 HTML/Markdown 长文本（≤8000 字）。</li>
  * </ol>
  *
@@ -56,8 +56,7 @@ public class ProductPublishRequest {
     @Min(value = 1, message = "库存必须大于或等于 1")
     private Integer stock;
 
-    /** 商品图片（base64 data URL 数组）：必填，1~9 张，且每张内容不能为空 */
-    @NotNull(message = "图片数量必须在 1 到 9 张之间")
-    @Size(min = 1, max = 9, message = "图片数量必须在 1 到 9 张之间")
+    /** 商品图片（base64 data URL 数组）：可选——不传时前端显示占位图（A.1.5-4）；传入时最多 9 张，且每张内容不能为空 */
+    @Size(max = 9, message = "图片数量不能超过 9 张")
     private List<@NotBlank(message = "图片内容不能为空") String> images;
 }

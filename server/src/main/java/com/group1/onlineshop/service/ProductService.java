@@ -64,7 +64,7 @@ public class ProductService {
      *   1. 类别必填：categoryId 缺失 → 400「商品类别必填」；类别不存在 → 400「类别不存在」；
      *      一级类别不可挂商品（A.1.2-2 必挂二级）→ 400「商品必须挂到二级类别」；
      *   2. 库存校验：stock 必须 ≥1（0 或负数）→ 400「库存必须大于或等于 1」；
-     *   3. 多图限制：images 必须 1~9 张 → 400「图片数量必须在 1 到 9 张之间」；
+     *   3. 多图限制：images 可选（不传时前端显示占位图），传入时 ≤9 张 → 400「图片数量不能超过 9 张」；
      *   4. 富文本描述：richDescription 支持 HTML/Markdown 长文本，≤8000 字（description 简要 ≤2000 字）；
      *   5. 其余沿用原规则：name 去空格后必填且 ≤100 字；price 必须 >0 且保留两位小数（HALF_UP）；
      *   6. 取消「同一时间只允许一件在售商品」限制，允许多商品并存（A.1.1-1）；
@@ -113,8 +113,8 @@ public class ProductService {
         if (stock == null || stock < 1) {
             throw new BizException("库存必须大于或等于 1");
         }
-        if (images == null || images.size() < 1 || images.size() > 9) {
-            throw new BizException("图片数量必须在 1 到 9 张之间");
+        if (images != null && images.size() > 9) {
+            throw new BizException("图片数量不能超过 9 张");
         }
 
         Product product = new Product();
@@ -127,19 +127,22 @@ public class ProductService {
         product.setStatus(Product.Status.ON_SALE);
         productRepository.save(product);
 
-        // 逐张保存图片并写入 product_image（sortOrder 从 0 开始，最小者即主图）
-        List<ProductImage> imageList = new ArrayList<>();
-        for (int i = 0; i < images.size(); i++) {
-            ProductImage pi = new ProductImage();
-            pi.setProductId(product.getId());
-            pi.setFilename(saveImage(images.get(i)));
-            pi.setSortOrder(i);
-            imageList.add(pi);
+        // 逐张保存图片并写入 product_image（sortOrder 从 0 开始，最小者即主图）；
+        // 图片可整组省略（images 为空），此时不写图片记录、Product.image 保持空，前端显示占位图
+        if (images != null && !images.isEmpty()) {
+            List<ProductImage> imageList = new ArrayList<>();
+            for (int i = 0; i < images.size(); i++) {
+                ProductImage pi = new ProductImage();
+                pi.setProductId(product.getId());
+                pi.setFilename(saveImage(images.get(i)));
+                pi.setSortOrder(i);
+                imageList.add(pi);
+            }
+            productImageRepository.saveAll(imageList);
+            // 兼容旧展示字段：主图文件名写入 Product.image
+            product.setImage(imageList.get(0).getFilename());
+            productRepository.save(product);
         }
-        productImageRepository.saveAll(imageList);
-        // 兼容旧展示字段：主图文件名写入 Product.image
-        product.setImage(imageList.get(0).getFilename());
-        productRepository.save(product);
         return ok();
     }
 
