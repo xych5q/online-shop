@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.group1.onlineshop.entity.Buyer;
 import com.group1.onlineshop.entity.Intent;
 import com.group1.onlineshop.entity.Product;
+import com.group1.onlineshop.exception.BizException;
 import com.group1.onlineshop.repository.BuyerRepository;
 import com.group1.onlineshop.repository.IntentRepository;
 import com.group1.onlineshop.repository.ProductRepository;
@@ -21,11 +22,13 @@ import org.springframework.test.web.servlet.MvcResult;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -246,6 +249,60 @@ class TradeFlowTest {
                 .andExpect(jsonPath("$.intent.code").doesNotExist())
                 // W-4 挂起期间：提交只入队，不立即进入交易
                 .andExpect(jsonPath("$.intent.status").value("queued"));
+    }
+
+    /** 用例 19（W-3 补充）：listMyIntents 给出买家历史三值展示，交易时间取自 Intent.dealtAt 而非商品下架时间。 */
+    @Test
+    void 我的历史返回三值展示且交易时间取自意向自身() {
+        Buyer b = buyer("zhangsan", "13800000001");
+        Product product = createOnSaleProduct("二手自行车", 2);
+        submit(b, product);
+
+        Map<String, Object> waiting = intentService.listMyIntents(b.getId(), 1);
+        assertEquals(1L, waiting.get("total")); // Page.getTotalElements() 为 long
+        Map<String, Object> queued = ((List<Map<String, Object>>) waiting.get("items")).get(0);
+        assertEquals("待交易", queued.get("result"));
+        assertEquals("二手自行车", queued.get("productName"));
+        assertNull(queued.get("dealTime")); // 未成交：无交易时间
+
+        tradeService.enterDeal(product);          // W-4 挂起期间：卖家后台触发
+        tradeService.markResult(product, "success");
+
+        Map<String, Object> done = intentService.listMyIntents(b.getId(), 1);
+        Map<String, Object> success = ((List<Map<String, Object>>) done.get("items")).get(0);
+        assertEquals("成功", success.get("result"));
+        assertNotNull(success.get("dealTime")); // 来自 dealtAt
+        assertNull(productRepository.findById(product.getId()).orElseThrow().getClosedAt()); // 成交不下架，商品 closedAt 仍为 null
+    }
+
+    /**
+     * 用例 20（W-7 压测暴露的并发缺陷回归）：同一商品已有交易进行中时，再次进入交易必须被拒绝。
+     *
+     * <p>基线版（tag {@code v0.1-iter1}）20 并发「进入交易」全部返回 200，库内出现 3 条 IN_TRANSACTION；
+     * 迭代 2 已加按商品 id 的互斥锁 + 进入前二次校验。
+     */
+    @Test
+    void 已有交易进行中时再次进入交易被拒绝() {
+        Product product = createOnSaleProduct("并发测试商品", 5);
+        submit(buyer("zhangsan", "13800000001"), product);
+        submit(buyer("lisi", "13800000002"), product);
+
+        tradeService.enterDeal(product);
+        assertEquals(1, inTransactionCount(product.getId()));
+
+        BizException ex = assertThrows(BizException.class, () -> tradeService.enterDeal(product));
+        assertEquals("已有交易进行中", ex.getMessage());
+        assertEquals(1, inTransactionCount(product.getId())); // 没有被推进第二条
+
+        // 标记失败后队列有人 → 自动递补，此时允许再次进入交易
+        tradeService.markResult(product, "fail");
+        assertEquals(1, inTransactionCount(product.getId()));
+    }
+
+    private long inTransactionCount(Long productId) {
+        return intentRepository
+                .findByProductIdAndStatusOrderBySubmittedAtAscIdAsc(productId, Intent.Status.IN_TRANSACTION)
+                .size();
     }
 
     // ---------- 测试数据准备 ----------

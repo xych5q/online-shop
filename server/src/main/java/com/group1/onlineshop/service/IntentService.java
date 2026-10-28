@@ -9,6 +9,8 @@ import com.group1.onlineshop.repository.IntentRepository;
 import com.group1.onlineshop.repository.ProductImageRepository;
 import com.group1.onlineshop.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -45,6 +47,9 @@ public class IntentService {
 
     /** 队列明细每页条数（接口设计 v2 §1.2：商品列表 12 条、其余 10 条） */
     private static final int QUEUE_PAGE_SIZE = 10;
+
+    /** 我的历史每页条数（FR-D4 / A.2.2-3：10 条/页） */
+    private static final int HISTORY_PAGE_SIZE = 10;
 
     /**
      * 提交购买意向（<b>登录态</b>，W-3）。
@@ -139,6 +144,69 @@ public class IntentService {
         result.put("totalPages", totalPages);
         result.put("total", all.size());
         return result;
+    }
+
+    /**
+     * 我的意向分页（<b>买家历史三值展示的数据源</b>，接口设计 v2 §2.5 服务层契约，调用方董嘉润 D-4）。
+     *
+     * <p>口径（FR-D4 / A.2.2-1 ~ A.2.2-8）：
+     * <ul>
+     *   <li>只取该账号名下的意向（{@code buyerId}）；旧系统归档数据 {@code buyerId} 为 null，自然不出现（A.2.4-3 B 方案）</li>
+     *   <li>按 {@code submittedAt} <b>倒序</b>，同一时刻以 {@code id} 倒序兜底</li>
+     *   <li>{@code ARCHIVED}（旧系统遗留只读数据）<b>不展示</b></li>
+     *   <li>{@code dealTime} 取 {@code Intent.dealtAt}：由 {@link TradeService#markResult} 在成功与失败时写入（A.2.2-2），
+     *       <b>不</b>取商品 {@code closedAt}——成交不再等于下架，商品未下架时该字段为 null</li>
+     *   <li>商品已被删除时 {@code productName} 为空串，不整条报错</li>
+     * </ul>
+     *
+     * @param buyerId 当前登录买家 id
+     * @param page    页码，从 1 起
+     * @return {@code {page,totalPages,total,items:[{intentId,productId,productName,submittedAt,result,dealTime}]}}
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> listMyIntents(Long buyerId, Integer page) {
+        int cur = page == null || page < 1 ? 1 : page;
+        Page<Intent> p = intentRepository.findByBuyerIdAndStatusNotOrderBySubmittedAtDescIdDesc(
+                buyerId, Intent.Status.ARCHIVED, PageRequest.of(cur - 1, HISTORY_PAGE_SIZE));
+
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (Intent it : p.getContent()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("intentId", it.getId());
+            m.put("productId", it.getProductId());
+            m.put("productName", productNameOf(it.getProductId()));
+            m.put("submittedAt", it.getSubmittedAt());
+            m.put("result", resultText(it.getStatus()));
+            m.put("dealTime", it.getDealtAt());
+            items.add(m);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("page", cur);
+        result.put("totalPages", p.getTotalPages());
+        result.put("total", p.getTotalElements());
+        result.put("items", items);
+        return result;
+    }
+
+    /**
+     * 意向状态 → 买家侧三值（接口设计 v2 §3.5）：
+     * {@code QUEUED} / {@code IN_TRANSACTION} → 待交易；{@code SUCCESS} → 成功；
+     * {@code FAILED} / {@code SOLD_OUT}（售罄失效）/ {@code CANCELLED}（旧数据）→ 失败。
+     */
+    private static String resultText(Intent.Status status) {
+        if (status == Intent.Status.SUCCESS) {
+            return "成功";
+        }
+        if (status == Intent.Status.QUEUED || status == Intent.Status.IN_TRANSACTION) {
+            return "待交易";
+        }
+        return "失败";
+    }
+
+    /** 商品名：商品已被删除时返回空串，不整条报错（A.2.2-6） */
+    private String productNameOf(Long productId) {
+        return productRepository.findById(productId).map(Product::getName).orElse("");
     }
 
     /**

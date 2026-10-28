@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 交易流转服务（队列与交易域；文件独占 owner 王振涛，见 .github/CODEOWNERS）。
@@ -36,6 +37,13 @@ public class TradeService {
     private final ProductRepository productRepository;
 
     /**
+     * 进入交易的互斥锁表：key = 商品 id。见 {@link #dealLock(Long)} 的说明与压测依据（W-7）。
+     *
+     * <p>锁对象常驻不移除：商品数量有限（课程项目量级），避免 remove 与 computeIfAbsent 竞态导致不同线程拿到不同锁。
+     */
+    private static final ConcurrentHashMap<Long, Object> DEAL_LOCKS = new ConcurrentHashMap<>();
+
+    /**
      * 队首自动进入交易（严格 FIFO，卖家不可挑人 —— A.2.3-9）。
      *
      * <p><b>冻结触发条件（T2）</b>：取该商品 {@code QUEUED} 队首（{@code submittedAt} 升序、{@code id} 升序兜底）
@@ -50,21 +58,42 @@ public class TradeService {
      * </ol>
      *
      * @param product 目标商品（调用方保证已加载且状态允许）
-     * @throws BizException 队列为空 → 400「当前没有排队的买家」
+     * @throws BizException 队列为空 → 400「当前没有排队的买家」；已有交易进行中 → 400「已有交易进行中」
      */
     @Transactional
     public void enterDeal(Product product) {
-        List<Intent> queue = queue(product.getId());
-        if (queue.isEmpty()) {
-            throw new BizException("当前没有排队的买家");
+        synchronized (dealLock(product.getId())) {
+            // 二次校验：并发请求同时读到「在售」时，只有第一个能真正推进，其余直接拒绝
+            if (hasActiveDeal(product.getId())) {
+                throw new BizException("已有交易进行中");
+            }
+            List<Intent> queue = queue(product.getId());
+            if (queue.isEmpty()) {
+                throw new BizException("当前没有排队的买家");
+            }
+            Intent head = queue.get(0);
+            head.setStatus(Intent.Status.IN_TRANSACTION);
+            intentRepository.save(head);
+            product.setStatus(Product.Status.FROZEN);
+            product.setFrozenBy("auto");
+            product.setFrozenAt(LocalDateTime.now());
+            productRepository.save(product);
         }
-        Intent head = queue.get(0);
-        head.setStatus(Intent.Status.IN_TRANSACTION);
-        intentRepository.save(head);
-        product.setStatus(Product.Status.FROZEN);
-        product.setFrozenBy("auto");
-        product.setFrozenAt(LocalDateTime.now());
-        productRepository.save(product);
+    }
+
+    /**
+     * 进入交易的互斥锁（按商品 id 粒度）。
+     *
+     * <p><b>为什么需要</b>：基线版（tag {@code v0.1-iter1}）经 JMeter 并发压测（W-7）实测出缺陷——
+     * 20 个并发「进入交易」请求全部返回 200，库内出现 <b>3 条</b> {@code IN_TRANSACTION}，
+     * 卖家后台概览因期望单条结果直接 500。根因是「查商品状态」与「置 IN_TRANSACTION」两步之间无互斥。
+     *
+     * <p><b>本实现的适用边界</b>：单机部署有效（课程项目现状）。若将来多实例部署，
+     * 需改为数据库层方案（{@code intent} 表对 {@code (product_id, status)} 建唯一约束，
+     * 或对商品行加悲观锁 {@code SELECT ... FOR UPDATE}）。
+     */
+    private Object dealLock(Long productId) {
+        return DEAL_LOCKS.computeIfAbsent(productId, k -> new Object());
     }
 
     /**
