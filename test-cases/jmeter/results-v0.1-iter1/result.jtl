@@ -1,0 +1,73 @@
+timeStamp,elapsed,label,responseCode,responseMessage,threadName,dataType,success,failureMessage,bytes,sentBytes,grpThreads,allThreads,URL,Latency,IdleTime,Connect,"code"
+1793186579993,180,POST /api/seller/login,200,,setUp-卖家登录 1-1,text,true,,252,231,1,1,http://localhost:8080/api/seller/login,174,0,34,null
+1793186580874,27,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-1,text,true,,192,228,1,1,http://localhost:8080/api/intents,27,0,1,SDYFXLNB
+1793186580903,9,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-2,text,true,,192,228,1,1,http://localhost:8080/api/intents,9,0,1,54QZT777
+1793186580919,9,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-3,text,true,,192,228,1,1,http://localhost:8080/api/intents,9,0,1,R7AZ8GXY
+1793186580934,8,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-4,text,true,,192,228,1,1,http://localhost:8080/api/intents,8,0,0,SZ6FRNSM
+1793186580953,9,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-5,text,true,,192,228,1,1,http://localhost:8080/api/intents,9,0,1,7DKWMES3
+1793186580974,11,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-6,text,true,,192,228,1,1,http://localhost:8080/api/intents,11,0,2,3RCUEZKH
+1793186580994,20,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-7,text,true,,192,228,1,1,http://localhost:8080/api/intents,20,0,0,9Q4KGWV7
+1793186581017,12,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-8,text,true,,192,228,1,1,http://localhost:8080/api/intents,12,0,1,RD6N5P4B
+1793186581034,9,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-9,text,true,,192,228,1,1,http://localhost:8080/api/intents,9,0,0,TTYQF6T2
+1793186581055,12,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-10,text,true,,192,230,1,1,http://localhost:8080/api/intents,12,0,2,5A9Q8R4X
+1793186581074,10,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-11,text,true,,192,230,1,1,http://localhost:8080/api/intents,10,0,2,BY77AHNB
+1793186581095,8,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-12,text,true,,192,230,1,1,http://localhost:8080/api/intents,8,0,1,FK7HECNM
+1793186581113,9,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-13,text,true,,192,230,1,1,http://localhost:8080/api/intents,9,0,1,83GDUMK7
+1793186581134,10,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-14,text,true,,192,230,1,1,http://localhost:8080/api/intents,10,0,1,6RGG54JG
+1793186581156,11,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-15,text,true,,192,230,1,1,http://localhost:8080/api/intents,11,0,1,95EFWQJK
+1793186581174,10,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-16,text,true,,192,230,1,1,http://localhost:8080/api/intents,10,0,1,GCJQ7KWW
+1793186581193,9,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-17,text,true,,192,230,1,1,http://localhost:8080/api/intents,9,0,1,UFNG7GRN
+1793186581214,8,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-18,text,true,,192,230,1,1,http://localhost:8080/api/intents,8,0,1,LNWCEKV7
+1793186581235,7,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-19,text,true,,192,230,1,1,http://localhost:8080/api/intents,7,0,0,RXS6HXAH
+1793186581254,10,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-20,text,true,,192,230,1,1,http://localhost:8080/api/intents,10,0,1,TZ6TC7KJ
+1793186581275,9,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-21,text,true,,192,230,1,1,http://localhost:8080/api/intents,9,0,1,RQ5AETWG
+1793186581296,13,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-22,text,true,,192,230,1,1,http://localhost:8080/api/intents,13,0,2,MV33LGBQ
+1793186581314,14,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-23,text,true,,192,230,1,1,http://localhost:8080/api/intents,14,0,1,PRH7JSVY
+1793186581334,8,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-24,text,true,,192,230,1,1,http://localhost:8080/api/intents,8,0,0,F92NP2T3
+1793186581352,7,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-25,text,true,,192,230,1,1,http://localhost:8080/api/intents,7,0,1,CZAV4VZK
+1793186581372,10,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-26,text,true,,192,230,1,1,http://localhost:8080/api/intents,10,0,1,Y9KGH4DY
+1793186581393,7,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-27,text,true,,192,230,1,1,http://localhost:8080/api/intents,7,0,0,H43HEJLB
+1793186581414,7,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-28,text,true,,192,230,1,1,http://localhost:8080/api/intents,7,0,2,WWB69M2A
+1793186581434,7,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-29,text,true,,192,230,1,1,http://localhost:8080/api/intents,6,0,1,TRXF4U24
+1793186581454,8,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-30,text,true,,192,230,1,1,http://localhost:8080/api/intents,7,0,1,CFH7433F
+1793186581476,7,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-31,text,true,,192,230,1,1,http://localhost:8080/api/intents,7,0,0,YGFQT589
+1793186581495,7,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-32,text,true,,192,230,1,1,http://localhost:8080/api/intents,7,0,0,ENL5AW4G
+1793186581514,10,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-33,text,true,,192,230,1,1,http://localhost:8080/api/intents,10,0,1,T2TCLPYB
+1793186581534,9,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-34,text,true,,192,230,1,1,http://localhost:8080/api/intents,9,0,1,ULTGQ8UV
+1793186581554,8,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-35,text,true,,192,230,1,1,http://localhost:8080/api/intents,7,0,1,Y7FNWK25
+1793186581575,19,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-36,text,true,,192,230,1,1,http://localhost:8080/api/intents,19,0,1,PCSC924U
+1793186581595,9,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-37,text,true,,192,230,1,1,http://localhost:8080/api/intents,9,0,1,2YXYBZCU
+1793186581615,6,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-38,text,true,,192,230,1,1,http://localhost:8080/api/intents,6,0,0,AUNT5T2G
+1793186581634,5,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-39,text,true,,192,230,1,1,http://localhost:8080/api/intents,5,0,0,R8AQ9U3N
+1793186581653,7,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-40,text,true,,192,230,1,1,http://localhost:8080/api/intents,7,0,1,VCVBAEE5
+1793186581674,7,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-41,text,true,,192,230,1,1,http://localhost:8080/api/intents,7,0,1,H3KK99Y8
+1793186581694,7,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-42,text,true,,192,230,1,1,http://localhost:8080/api/intents,7,0,1,JNV7ZKY5
+1793186581713,7,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-43,text,true,,192,230,1,1,http://localhost:8080/api/intents,7,0,1,BLGCKPPN
+1793186581735,6,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-44,text,true,,192,230,1,1,http://localhost:8080/api/intents,6,0,1,RY9SYCR9
+1793186581754,6,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-45,text,true,,192,230,1,1,http://localhost:8080/api/intents,6,0,1,AYM6SPPD
+1793186581774,9,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-46,text,true,,192,230,1,1,http://localhost:8080/api/intents,9,0,1,U3P3XBTH
+1793186581793,8,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-47,text,true,,192,230,1,1,http://localhost:8080/api/intents,8,0,1,CDLGYCYC
+1793186581815,6,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-48,text,true,,192,230,1,1,http://localhost:8080/api/intents,6,0,1,JB5GQFB7
+1793186581834,6,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-49,text,true,,192,230,1,1,http://localhost:8080/api/intents,6,0,1,82VKRRLL
+1793186581854,6,POST /api/intents 提交意向,200,,场景1-并发提交意向(50线程) 1-50,text,true,,192,230,1,1,http://localhost:8080/api/intents,5,0,1,GQJNA5DF
+1793186581865,45,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-15,text,true,,183,288,20,20,http://localhost:8080/api/seller/products/1/deal,45,0,0,null
+1793186581862,49,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-6,text,true,,183,288,20,20,http://localhost:8080/api/seller/products/1/deal,48,0,1,null
+1793186581868,44,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-19,text,true,,183,288,18,18,http://localhost:8080/api/seller/products/1/deal,44,0,0,null
+1793186581862,52,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-5,text,true,,183,288,17,17,http://localhost:8080/api/seller/products/1/deal,52,0,2,null
+1793186581864,51,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-12,text,true,,183,288,16,16,http://localhost:8080/api/seller/products/1/deal,51,0,1,null
+1793186581862,56,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-3,text,true,,183,288,15,15,http://localhost:8080/api/seller/products/1/deal,56,0,1,null
+1793186581862,58,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-2,text,true,,183,288,14,14,http://localhost:8080/api/seller/products/1/deal,58,0,1,null
+1793186581862,61,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-8,text,true,,183,288,13,13,http://localhost:8080/api/seller/products/1/deal,61,0,1,null
+1793186581868,55,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-20,text,true,,183,288,13,13,http://localhost:8080/api/seller/products/1/deal,55,0,2,null
+1793186581868,56,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-18,text,true,,183,288,11,11,http://localhost:8080/api/seller/products/1/deal,56,0,0,null
+1793186581862,63,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-4,text,true,,183,288,11,11,http://localhost:8080/api/seller/products/1/deal,63,0,1,null
+1793186581864,63,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-13,text,true,,183,288,9,9,http://localhost:8080/api/seller/products/1/deal,63,0,1,null
+1793186581862,66,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-7,text,true,,183,288,9,9,http://localhost:8080/api/seller/products/1/deal,65,0,1,null
+1793186581863,65,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-10,text,true,,183,288,8,8,http://localhost:8080/api/seller/products/1/deal,64,0,0,null
+1793186581863,67,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-11,text,true,,183,288,6,6,http://localhost:8080/api/seller/products/1/deal,67,0,1,null
+1793186581862,68,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-1,text,true,,183,288,6,6,http://localhost:8080/api/seller/products/1/deal,68,0,1,null
+1793186581866,66,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-14,text,true,,183,288,4,4,http://localhost:8080/api/seller/products/1/deal,65,0,1,null
+1793186581862,70,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-9,text,true,,183,288,4,4,http://localhost:8080/api/seller/products/1/deal,70,0,1,null
+1793186581864,70,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-16,text,true,,183,288,2,2,http://localhost:8080/api/seller/products/1/deal,70,0,1,null
+1793186581865,71,POST /api/seller/products/{id}/deal,200,,场景2-并发队首进入交易(20线程) 2-17,text,true,,183,288,1,1,http://localhost:8080/api/seller/products/1/deal,71,0,0,null
+1793186581938,31,GET /api/seller/overview,500,,tearDown-取后台概览 1-1,text,false,,177,197,1,1,http://localhost:8080/api/seller/overview,31,0,1,null

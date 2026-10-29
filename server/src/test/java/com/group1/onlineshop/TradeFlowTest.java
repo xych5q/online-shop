@@ -1,8 +1,11 @@
 package com.group1.onlineshop;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.group1.onlineshop.entity.Buyer;
 import com.group1.onlineshop.entity.Intent;
 import com.group1.onlineshop.entity.Product;
+import com.group1.onlineshop.exception.BizException;
+import com.group1.onlineshop.repository.BuyerRepository;
 import com.group1.onlineshop.repository.IntentRepository;
 import com.group1.onlineshop.repository.ProductRepository;
 import com.group1.onlineshop.service.IntentService;
@@ -17,12 +20,15 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -30,10 +36,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 交易流转核心测试（课程 16 组用例中的第 12~16 组）。
- * 交易规则（进入交易 / 标记结果 / 处置失败意向）直接调用本模块的 TradeService 验证
- * （卖家控制器当前仍走 ProductService 中的临时实现，规则相同但归属队友文件，不改动）；
- * 涉及 HTTP 的对外行为（手动解冻拦截、口令码查询、历史详情）通过 MockMvc 走真实链路验证。
+ * 交易流转核心测试（队列与交易域，owner 王振涛；对应任务 W-3 / W-4 / W-5 / W-6）。
+ *
+ * <p>迭代 2（挑战需求 A）改写说明：
+ * <ul>
+ *   <li>意向改绑账号：不再有口令码，{@code submit} 走 {@code Buyer} + {@code productId}，
+ *       以 {@code buyerId} / 意向 id 检索，不再用 {@code findByCode}</li>
+ *   <li>队首<b>自动</b>进入交易（A.2.3-9）：提交后无需再手动调 {@code enterDeal}，
+ *       故旧用例中显式的 {@code enterDeal} 调用已移除</li>
+ *   <li>成交不等于下架（A.1.3-4）：旧用例 15「成交即下架、队列剩余全部失败」断言已按新口径改写</li>
+ *   <li>已删除旧用例 17 / 18（交易中买家撤销与撤销后恢复在售）——A.2.2-9 买家无取消入口，能力已废止</li>
+ * </ul>
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -52,6 +65,9 @@ class TradeFlowTest {
     private IntentRepository intentRepository;
 
     @Autowired
+    private BuyerRepository buyerRepository;
+
+    @Autowired
     private MockMvc mockMvc;
 
     @Autowired
@@ -62,18 +78,20 @@ class TradeFlowTest {
     void cleanUp() {
         intentRepository.deleteAll();
         productRepository.deleteAll();
+        buyerRepository.deleteAll();
     }
 
     /** 用例 12：交易中（自动冻结 frozenBy=auto）手动解冻返回 400「交易中的商品不能手动解冻」。 */
     @Test
     void 交易中手动解冻返回400() throws Exception {
-        Product product = createOnSaleProduct();
-        submit("张三", "13800000001");
-        tradeService.enterDeal(product);
-        // 商品已被交易自动冻结
+        Product product = createOnSaleProduct("测试商品", 5);
+        submit(buyer("zhangsan", "13800000001"), product);
+        tradeService.enterDeal(product); // W-4 挂起期间：首次进入交易由卖家在后台触发（裁定后改为提交时自动触发）
+        // 队首进入交易，商品被自动冻结
         Product reloaded = productRepository.findById(product.getId()).orElseThrow();
         assertEquals(Product.Status.FROZEN, reloaded.getStatus());
         assertEquals("auto", reloaded.getFrozenBy());
+
         String token = login();
         mockMvc.perform(post("/api/seller/products/" + product.getId() + "/unfreeze")
                         .header("X-Token", token))
@@ -81,151 +99,241 @@ class TradeFlowTest {
                 .andExpect(jsonPath("$.error").value("交易中的商品不能手动解冻"));
     }
 
-    /** 用例 13：标记交易失败后下一位自动递补进入交易（商品保持冻结）。 */
+    /** 用例 13：标记交易失败后下一位自动递补进入交易（商品保持冻结，T5）。 */
     @Test
     void 标记交易失败后下一位自动递补() {
-        Product product = createOnSaleProduct();
-        String code1 = submit("张三", "13800000001");
-        String code2 = submit("李四", "13800000002");
-        tradeService.enterDeal(product);
+        Product product = createOnSaleProduct("测试商品", 5);
+        Buyer b1 = buyer("zhangsan", "13800000001");
+        Buyer b2 = buyer("lisi", "13800000002");
+        long id1 = submit(b1, product);
+        long id2 = submit(b2, product);
+        tradeService.enterDeal(product); // W-4 挂起期间：卖家后台触发
 
-        Intent head = intentRepository.findByCode(code1).orElseThrow();
-        assertEquals(Intent.Status.IN_TRANSACTION, head.getStatus());
+        assertEquals(Intent.Status.IN_TRANSACTION, intent(id1).getStatus());
+        assertEquals(Intent.Status.QUEUED, intent(id2).getStatus());
 
         tradeService.markResult(product, "fail");
 
-        Intent failed = intentRepository.findByCode(code1).orElseThrow();
-        assertEquals(Intent.Status.FAILED, failed.getStatus());
-        assertFalse(failed.isDisposed()); // 待卖家处置
-        Intent next = intentRepository.findByCode(code2).orElseThrow();
-        assertEquals(Intent.Status.IN_TRANSACTION, next.getStatus()); // 自动递补，无需卖家再次点击
-        Product reloaded = productRepository.findById(product.getId()).orElseThrow();
-        assertEquals(Product.Status.FROZEN, reloaded.getStatus()); // 商品保持冻结
-        assertEquals("auto", reloaded.getFrozenBy());
-    }
-
-    /** 用例 14：失败买家重新排队后原口令码仍然有效且排到队尾。 */
-    @Test
-    void 失败买家重新排队后原口令码有效且排到队尾() throws Exception {
-        Product product = createOnSaleProduct();
-        String codeA = submit("张三", "13800000001");
-        String codeB = submit("李四", "13800000002");
-        String codeC = submit("王五", "13800000003");
-        tradeService.enterDeal(product);
-        tradeService.markResult(product, "fail"); // A 失败，B 自动递补进入交易，C 仍在排队
-        // 递补确认：B 已进入交易，C 仍在排队
-        assertEquals(Intent.Status.IN_TRANSACTION, intentRepository.findByCode(codeB).orElseThrow().getStatus());
-        assertEquals(Intent.Status.QUEUED, intentRepository.findByCode(codeC).orElseThrow().getStatus());
-
-        Intent failedA = intentRepository.findByCode(codeA).orElseThrow();
-        tradeService.disposeFailed(failedA, "requeue");
-
-        // 原记录已处置并保留作历史流水
-        Intent original = intentRepository.findById(failedA.getId()).orElseThrow();
-        assertTrue(original.isDisposed());
-        // 新记录沿用原口令码、指向原意向、重新排队
-        Intent requeued = intentRepository.findByCode(codeA).orElseThrow();
-        assertEquals(Intent.Status.QUEUED, requeued.getStatus());
-        assertEquals(failedA.getId(), requeued.getRequeuedFrom());
-        assertFalse(requeued.isDisposed());
-        // 原口令码查询仍然有效，且排在当前队尾（C 之后，位次 2）
-        mockMvc.perform(get("/api/intents/lookup/" + codeA))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.intent.status").value("queued"))
-                .andExpect(jsonPath("$.intent.inTransaction").value(false))
-                .andExpect(jsonPath("$.intent.position").value(2));
-    }
-
-    /** 用例 15：标记交易成功后队列剩余意向全部转为失败，商品下架进历史。 */
-    @Test
-    void 标记交易成功后队列剩余意向全部转失败() {
-        Product product = createOnSaleProduct();
-        String code1 = submit("张三", "13800000001");
-        String code2 = submit("李四", "13800000002");
-        String code3 = submit("王五", "13800000003");
-        tradeService.enterDeal(product);
-        tradeService.markResult(product, "success");
-
-        Intent winner = intentRepository.findByCode(code1).orElseThrow();
-        assertEquals(Intent.Status.SUCCESS, winner.getStatus());
-        assertTrue(winner.isDisposed());
-        for (String code : List.of(code2, code3)) {
-            Intent loser = intentRepository.findByCode(code).orElseThrow();
-            assertEquals(Intent.Status.FAILED, loser.getStatus());
-            assertTrue(loser.isDisposed());
-        }
-        Product reloaded = productRepository.findById(product.getId()).orElseThrow();
-        assertEquals(Product.Status.OFF_SHELF, reloaded.getStatus());
-        assertNotNull(reloaded.getClosedAt());
-    }
-
-    /** 用例 16：历史详情的意向流水中不包含 code 字段（口令码不进历史）。 */
-    @Test
-    void 历史详情意向流水不含口令码() throws Exception {
-        Product product = createOnSaleProduct();
-        submit("张三", "13800000001");
-        submit("李四", "13800000002");
-        tradeService.enterDeal(product);
-        tradeService.markResult(product, "success"); // 商品下架进历史
-
-        String token = login();
-        mockMvc.perform(get("/api/seller/history/" + product.getId())
-                        .header("X-Token", token))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.intents.length()").value(2))
-                .andExpect(jsonPath("$.intents[0].name").exists())
-                .andExpect(jsonPath("$.intents[0].phone").exists())
-                .andExpect(jsonPath("$.intents[0].code").doesNotExist())
-                .andExpect(jsonPath("$.intents[1].code").doesNotExist());
-    }
-
-    /** 用例 17（SRS v1.3 FR-B5）：交易中买家可撤销 → 交易终止，下一位自动递补进入交易，商品保持冻结。 */
-    @Test
-    void 交易中买家可撤销且队列自动递补() {
-        Product product = createOnSaleProduct();
-        String codeA = submit("张三", "13800000001");
-        String codeB = submit("李四", "13800000002");
-        tradeService.enterDeal(product);
-        assertEquals(Intent.Status.IN_TRANSACTION, intentRepository.findByCode(codeA).orElseThrow().getStatus());
-
-        intentService.cancel(codeA); // 交易中撤销不再被拒绝
-
-        assertEquals(Intent.Status.CANCELLED, intentRepository.findByCode(codeA).orElseThrow().getStatus());
-        assertEquals(Intent.Status.IN_TRANSACTION, intentRepository.findByCode(codeB).orElseThrow().getStatus());
+        assertEquals(Intent.Status.FAILED, intent(id1).getStatus());
+        assertFalse(intent(id1).isDisposed()); // 待卖家处置
+        assertNotNull(intent(id1).getDealtAt()); // 失败也要写交易结束时间（买家历史要显示「何时失败」）
+        assertEquals(Intent.Status.IN_TRANSACTION, intent(id2).getStatus()); // 自动递补，无需卖家点击
         Product reloaded = productRepository.findById(product.getId()).orElseThrow();
         assertEquals(Product.Status.FROZEN, reloaded.getStatus());
         assertEquals("auto", reloaded.getFrozenBy());
     }
 
-    /** 用例 18：交易中撤销且队列无人 → 商品自动恢复在售。 */
+    /** 用例 14（改写）：requeue 沿用账号与电话、不再生成口令码，并排到队尾。 */
     @Test
-    void 交易中撤销且队列无人时商品恢复在售() {
-        Product product = createOnSaleProduct();
-        String codeA = submit("张三", "13800000001");
-        tradeService.enterDeal(product);
+    void 失败买家重新排队后沿用账号且排到队尾() {
+        Product product = createOnSaleProduct("测试商品", 5);
+        Buyer b1 = buyer("zhangsan", "13800000001");
+        Buyer b2 = buyer("lisi", "13800000002");
+        Buyer b3 = buyer("wangwu", "13800000003");
+        long id1 = submit(b1, product);
+        long id2 = submit(b2, product);
+        long id3 = submit(b3, product);
+        tradeService.enterDeal(product);          // W-4 挂起期间：卖家后台触发
+        tradeService.markResult(product, "fail"); // b1 失败，b2 自动递补，b3 仍在排队
+        assertEquals(Intent.Status.IN_TRANSACTION, intent(id2).getStatus());
+        assertEquals(Intent.Status.QUEUED, intent(id3).getStatus());
 
-        intentService.cancel(codeA);
+        Intent failed = intent(id1);
+        tradeService.disposeFailed(failed, "requeue");
 
-        assertEquals(Intent.Status.CANCELLED, intentRepository.findByCode(codeA).orElseThrow().getStatus());
-        Product reloaded = productRepository.findById(product.getId()).orElseThrow();
-        assertEquals(Product.Status.ON_SALE, reloaded.getStatus());
-        assertNull(reloaded.getFrozenBy());
-        assertNull(reloaded.getFrozenAt());
+        // 原记录保留作历史流水并置已处置
+        assertTrue(intent(id1).isDisposed());
+        // 新记录：沿用原账号与电话快照、code=null、排到队尾（在 b3 之后，位次 2）
+        List<Intent> queue = intentRepository
+                .findByProductIdAndStatusOrderBySubmittedAtAscIdAsc(product.getId(), Intent.Status.QUEUED);
+        assertEquals(2, queue.size());
+        Intent requeued = queue.get(1);
+        assertEquals(Intent.Status.QUEUED, requeued.getStatus());
+        assertEquals(id1, requeued.getRequeuedFrom());
+        assertFalse(requeued.isDisposed());
+        assertEquals(b1.getId(), requeued.getBuyerId());   // 沿用原账号（A.2.3-8）
+        assertEquals("13800000001", requeued.getPhone());  // 沿用电话快照
+        assertNull(requeued.getCode());                     // 口令码整体废弃（C6）
     }
 
-    /** 直接落库一个在售商品（测试数据准备） */
-    private Product createOnSaleProduct() {
+    /** 用例 15（改写，A.1.3-4）：成交成功且仍有库存 → 商品<b>回在售继续卖</b>，队列不清空，队首自动进下一笔。 */
+    @Test
+    void 成交成功且仍有库存时商品回在售且队列不清空() {
+        Product product = createOnSaleProduct("测试商品", 2);
+        Buyer b1 = buyer("zhangsan", "13800000001");
+        Buyer b2 = buyer("lisi", "13800000002");
+        long id1 = submit(b1, product);
+        long id2 = submit(b2, product);
+        tradeService.enterDeal(product); // W-4 挂起期间：卖家后台触发
+
+        tradeService.markResult(product, "success");
+
+        assertEquals(Intent.Status.SUCCESS, intent(id1).getStatus());
+        assertTrue(intent(id1).isDisposed());
+        assertNotNull(intent(id1).getDealtAt()); // 交易时间写在意向自身，成交不下架时商品 closedAt 为 null
+        assertNull(productRepository.findById(product.getId()).orElseThrow().getClosedAt()); // 成交≠下架
+        // 关键：队列不清空，下一位自动进入下一笔交易（而不是被清成失败）
+        assertEquals(Intent.Status.IN_TRANSACTION, intent(id2).getStatus());
+        Product reloaded = productRepository.findById(product.getId()).orElseThrow();
+        assertEquals(Product.Status.FROZEN, reloaded.getStatus()); // 已进入下一笔交易
+        assertEquals(1, reloaded.getStock());                        // 扣 1 件，剩 1
+        assertNull(reloaded.getClosedAt());                          // 未下架
+    }
+
+    /** 用例 15b（W-5）：库存扣减归零 → 商品售罄下架，队列未成交意向置「售罄失效」。 */
+    @Test
+    void 库存归零时商品售罄且队列未成交意向置售罄失效() {
+        Product product = createOnSaleProduct("测试商品", 1);
+        Buyer b1 = buyer("zhangsan", "13800000001");
+        Buyer b2 = buyer("lisi", "13800000002");
+        long id1 = submit(b1, product);
+        long id2 = submit(b2, product);
+        tradeService.enterDeal(product); // W-4 挂起期间：卖家后台触发
+
+        tradeService.markResult(product, "success");
+
+        assertEquals(Intent.Status.SUCCESS, intent(id1).getStatus());
+        assertEquals(Intent.Status.SOLD_OUT, intent(id2).getStatus()); // 售罄失效
+        assertTrue(intent(id2).isDisposed());
+        Product reloaded = productRepository.findById(product.getId()).orElseThrow();
+        assertEquals(Product.Status.SOLD_OUT, reloaded.getStatus());
+        assertEquals(0, reloaded.getStock());
+        assertEquals("SOLD_OUT", reloaded.getOffShelfReason());
+        assertNotNull(reloaded.getClosedAt());
+    }
+
+    /** 用例 16：任何环节都不再产生口令码（code 恒为 null，C6）。 */
+    @Test
+    void 全流程不再产生口令码() {
+        Product product = createOnSaleProduct("测试商品", 1);
+        long id1 = submit(buyer("zhangsan", "13800000001"), product);
+        long id2 = submit(buyer("lisi", "13800000002"), product);
+        tradeService.enterDeal(product); // W-4 挂起期间：卖家后台触发
+        tradeService.markResult(product, "success");
+
+        for (long id : List.of(id1, id2)) {
+            assertNull(intent(id).getCode());
+        }
+    }
+
+    /** 用例 17（W-6）：提交购买意向不扣库存。 */
+    @Test
+    void 提交意向不扣库存() {
+        Product product = createOnSaleProduct("测试商品", 3);
+        submit(buyer("zhangsan", "13800000001"), product);
+        submit(buyer("lisi", "13800000002"), product);
+        assertEquals(3, productRepository.findById(product.getId()).orElseThrow().getStock());
+    }
+
+    /** 用例 18（W-3）：提交意向必须登录态，未登录返回 401；登录后出参不含 code。 */
+    @Test
+    void 提交意向必须登录态且出参不含口令码() throws Exception {
+        Product product = createOnSaleProduct("测试商品", 3);
+
+        mockMvc.perform(post("/api/intents")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"productId\":" + product.getId() + "}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("未登录或登录已失效"));
+
+        Buyer b = buyer("zhangsan", "13800000001");
+        b.setToken("test-buyer-token-" + System.nanoTime());
+        buyerRepository.save(b);
+
+        mockMvc.perform(post("/api/intents")
+                        .header("X-Token", b.getToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"productId\":" + product.getId() + "}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.intent.intentId").exists())
+                .andExpect(jsonPath("$.intent.code").doesNotExist())
+                // W-4 挂起期间：提交只入队，不立即进入交易
+                .andExpect(jsonPath("$.intent.status").value("queued"));
+    }
+
+    /** 用例 19（W-3 补充）：listMyIntents 给出买家历史三值展示，交易时间取自 Intent.dealtAt 而非商品下架时间。 */
+    @Test
+    void 我的历史返回三值展示且交易时间取自意向自身() {
+        Buyer b = buyer("zhangsan", "13800000001");
+        Product product = createOnSaleProduct("二手自行车", 2);
+        submit(b, product);
+
+        Map<String, Object> waiting = intentService.listMyIntents(b.getId(), 1);
+        assertEquals(1L, waiting.get("total")); // Page.getTotalElements() 为 long
+        Map<String, Object> queued = ((List<Map<String, Object>>) waiting.get("items")).get(0);
+        assertEquals("待交易", queued.get("result"));
+        assertEquals("二手自行车", queued.get("productName"));
+        assertNull(queued.get("dealTime")); // 未成交：无交易时间
+
+        tradeService.enterDeal(product);          // W-4 挂起期间：卖家后台触发
+        tradeService.markResult(product, "success");
+
+        Map<String, Object> done = intentService.listMyIntents(b.getId(), 1);
+        Map<String, Object> success = ((List<Map<String, Object>>) done.get("items")).get(0);
+        assertEquals("成功", success.get("result"));
+        assertNotNull(success.get("dealTime")); // 来自 dealtAt
+        assertNull(productRepository.findById(product.getId()).orElseThrow().getClosedAt()); // 成交不下架，商品 closedAt 仍为 null
+    }
+
+    /**
+     * 用例 20（W-7 压测暴露的并发缺陷回归）：同一商品已有交易进行中时，再次进入交易必须被拒绝。
+     *
+     * <p>基线版（tag {@code v0.1-iter1}）20 并发「进入交易」全部返回 200，库内出现 3 条 IN_TRANSACTION；
+     * 迭代 2 已加按商品 id 的互斥锁 + 进入前二次校验。
+     */
+    @Test
+    void 已有交易进行中时再次进入交易被拒绝() {
+        Product product = createOnSaleProduct("并发测试商品", 5);
+        submit(buyer("zhangsan", "13800000001"), product);
+        submit(buyer("lisi", "13800000002"), product);
+
+        tradeService.enterDeal(product);
+        assertEquals(1, inTransactionCount(product.getId()));
+
+        BizException ex = assertThrows(BizException.class, () -> tradeService.enterDeal(product));
+        assertEquals("已有交易进行中", ex.getMessage());
+        assertEquals(1, inTransactionCount(product.getId())); // 没有被推进第二条
+
+        // 标记失败后队列有人 → 自动递补，此时允许再次进入交易
+        tradeService.markResult(product, "fail");
+        assertEquals(1, inTransactionCount(product.getId()));
+    }
+
+    private long inTransactionCount(Long productId) {
+        return intentRepository
+                .findByProductIdAndStatusOrderBySubmittedAtAscIdAsc(productId, Intent.Status.IN_TRANSACTION)
+                .size();
+    }
+
+    // ---------- 测试数据准备 ----------
+
+    private Product createOnSaleProduct(String name, int stock) {
         Product product = new Product();
-        product.setName("测试商品");
+        product.setName(name);
         product.setDescription("测试描述");
         product.setPrice(new BigDecimal("99.90"));
         product.setStatus(Product.Status.ON_SALE);
+        product.setStock(stock); // 迭代 2：发布时库存 ≥1，成交时扣减
         return productRepository.save(product);
     }
 
-    /** 通过买家服务提交意向，返回口令码 */
-    private String submit(String name, String phone) {
-        return intentService.submit(name, phone);
+    private Buyer buyer(String username, String phone) {
+        Buyer b = new Buyer();
+        b.setUsername(username);
+        b.setPasswordHash("not-used-in-this-test");
+        b.setPhone(phone);
+        b.setCreatedAt(LocalDateTime.now());
+        return buyerRepository.save(b);
+    }
+
+    /** 提交意向，返回意向 id（迭代 2：登录态 + 指定商品，无口令码） */
+    private long submit(Buyer buyer, Product product) {
+        intentService.submit(buyer, product.getId());
+        return intentRepository.findByBuyerIdOrderBySubmittedAtDescIdDesc(buyer.getId()).get(0).getId();
+    }
+
+    private Intent intent(long id) {
+        return intentRepository.findById(id).orElseThrow();
     }
 
     /** 登录卖家账号（admin / seller123，DataInitializer 首次启动创建），返回 token */

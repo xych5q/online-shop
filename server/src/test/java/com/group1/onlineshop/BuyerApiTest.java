@@ -24,7 +24,6 @@ import static org.hamcrest.Matchers.containsString;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -126,107 +125,44 @@ class BuyerApiTest {
                 .andExpect(jsonPath("$.ok").value(true));
     }
 
-    /** 用例 6：三个买家依次入队，位次分别为 1、2、3。 */
+    /** 用例 6（迭代2 · FR-D3 / W-3）：未登录提交意向返回 401「未登录或登录已失效」，不存在匿名通道。 */
     @Test
-    void 三个买家依次入队位次分别为123() throws Exception {
-        createOnSaleProduct();
-        String code1 = submitIntent("张三", "13800000001");
-        String code2 = submitIntent("李四", "13800000002");
-        String code3 = submitIntent("王五", "13800000003");
-        mockMvc.perform(get("/api/intents/lookup/" + code1))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.intent.position").value(1))
-                .andExpect(jsonPath("$.intent.status").value("queued"))
-                .andExpect(jsonPath("$.intent.inTransaction").value(false));
-        mockMvc.perform(get("/api/intents/lookup/" + code2))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.intent.position").value(2));
-        mockMvc.perform(get("/api/intents/lookup/" + code3))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.intent.position").value(3));
-    }
-
-    /** 用例 7：姓名或电话为空提交意向返回 400「姓名与联系电话均为必填」。 */
-    @Test
-    void 姓名或电话为空提交意向返回400() throws Exception {
-        createOnSaleProduct();
-        // 姓名为空白
+    void 未登录提交意向返回401() throws Exception {
         mockMvc.perform(post("/api/intents")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"   \",\"phone\":\"13800000001\"}"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("姓名与联系电话均为必填"));
-        // 电话为空
-        mockMvc.perform(post("/api/intents")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"张三\",\"phone\":\"\"}"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("姓名与联系电话均为必填"));
+                        .content("{\"productId\":1}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("未登录或登录已失效"));
     }
 
-    /** 用例 8：无效口令码查询返回 404「口令码无效或已失效」。 */
+    /** 用例 7（迭代2 · W-3）：买家登录态提交意向成功，只回 intent 四字段，不回口令码、不回位次（C6 / A.2.2-6）。 */
     @Test
-    void 无效口令码查询返回404() throws Exception {
-        mockMvc.perform(get("/api/intents/lookup/NOTEXIST"))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error").value("口令码无效或已失效"));
-    }
-
-    /** 用例 9：修改电话后排队位次不变（只改姓名电话，不动 submittedAt）。 */
-    @Test
-    void 修改电话后位次不变() throws Exception {
-        createOnSaleProduct();
-        String code1 = submitIntent("张三", "13800000001");
-        String code2 = submitIntent("李四", "13800000002");
-        String code3 = submitIntent("王五", "13800000003");
-        mockMvc.perform(put("/api/intents/lookup/" + code2)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"李四\",\"phone\":\"13900000009\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.ok").value(true));
-        // 李四电话已更新、位次仍为 2；王五位次不受影响
-        mockMvc.perform(get("/api/intents/lookup/" + code2))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.intent.position").value(2))
-                .andExpect(jsonPath("$.intent.phone").value("13900000009"));
-        mockMvc.perform(get("/api/intents/lookup/" + code3))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.intent.position").value(3));
-    }
-
-    /** 用例 10：撤销意向后该口令码查询返回 404，且队列自动前移。 */
-    @Test
-    void 撤销后该口令码查询返回404() throws Exception {
-        createOnSaleProduct();
-        String code1 = submitIntent("张三", "13800000001");
-        String code2 = submitIntent("李四", "13800000002");
-        mockMvc.perform(post("/api/intents/lookup/" + code1 + "/cancel"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.ok").value(true));
-        // 已撤销（终态）→ 该口令码立即失效
-        mockMvc.perform(get("/api/intents/lookup/" + code1))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error").value("口令码无效或已失效"));
-        // 撤销后队列前移：李四位次变为 1
-        mockMvc.perform(get("/api/intents/lookup/" + code2))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.intent.position").value(1));
-    }
-
-    /** 用例 11：商品冻结后提交意向返回 400「商品交易中，暂停接收新意向」。 */
-    @Test
-    void 商品冻结后提交意向返回400() throws Exception {
+    void 登录态提交意向成功且不含口令码() throws Exception {
         Product product = createOnSaleProduct();
-        // 模拟卖家手动冻结
-        product.setStatus(Product.Status.FROZEN);
-        product.setFrozenBy("manual");
-        product.setFrozenAt(LocalDateTime.now());
-        productRepository.save(product);
+        String buyerToken = registerBuyer("buyer01");
         mockMvc.perform(post("/api/intents")
+                        .header("X-Token", buyerToken)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"张三\",\"phone\":\"13800000001\"}"))
+                        .content("{\"productId\":" + product.getId() + "}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.intent.intentId").exists())
+                .andExpect(jsonPath("$.intent.productId").value(product.getId()))
+                .andExpect(jsonPath("$.intent.status").exists())
+                .andExpect(jsonPath("$.intent.submittedAt").exists())
+                .andExpect(jsonPath("$.intent.code").doesNotExist())
+                .andExpect(jsonPath("$.intent.position").doesNotExist());
+    }
+
+    /** 用例 8（迭代2 · W-3）：商品不存在提交意向返回 400「商品不存在」（多商品场景必须指定 productId）。 */
+    @Test
+    void 商品不存在时提交意向返回400() throws Exception {
+        String buyerToken = registerBuyer("buyer02");
+        mockMvc.perform(post("/api/intents")
+                        .header("X-Token", buyerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"productId\":999999}"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("商品交易中，暂停接收新意向"));
+                .andExpect(jsonPath("$.error").value("商品不存在"));
     }
 
     /** 登录卖家账号（admin / seller123，DataInitializer 首次启动创建），返回 token */
@@ -254,17 +190,25 @@ class BuyerApiTest {
         product.setName("测试商品");
         product.setDescription("测试描述");
         product.setPrice(new BigDecimal("99.90"));
+        product.setStock(5);
         product.setStatus(Product.Status.ON_SALE);
         return productRepository.save(product);
     }
 
-    /** 通过买家接口提交意向，返回口令码 */
-    private String submitIntent(String name, String phone) throws Exception {
-        MvcResult result = mockMvc.perform(post("/api/intents")
+    /** 注册并登录买家账号，返回 X-Token（FR-D1 / FR-D2）；用户名带时间戳，避免 H2 文件库跨轮次残留导致重名。 */
+    private String registerBuyer(String prefix) throws Exception {
+        String username = prefix + "_" + (System.currentTimeMillis() % 10000000L);
+        String password = "abcd1234";
+        mockMvc.perform(post("/api/buyers/register")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of("name", name, "phone", phone))))
+                        .content("{\"username\":\"" + username + "\",\"password\":\"" + password
+                                + "\",\"phone\":\"13800000001\",\"phoneConfirm\":\"13800000001\"}"))
+                .andExpect(status().isOk());
+        MvcResult result = mockMvc.perform(post("/api/buyers/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}"))
                 .andExpect(status().isOk())
                 .andReturn();
-        return objectMapper.readTree(result.getResponse().getContentAsString()).get("code").asText();
+        return objectMapper.readTree(result.getResponse().getContentAsString()).get("token").asText();
     }
 }
