@@ -236,20 +236,20 @@ public class BuyerService {
 
     /**
      * 交易时间（PR #2 评审意见第 2 条，口径已与陈星宇对齐）：
-     * <b>本方法为临时实现</b>——{@code Intent} 暂无成交时间列，现取所属商品的下架时间
-     * {@code Product.closedAt} 作为成交 / 结束时间；排队中、交易中一律为 null。
+     * 直接取 {@code Intent.dealtAt}——该字段由陈星宇 C-1 落地，并在
+     * {@code TradeService#markResult}（W-1 / W-5 / W-6 所在域）标记交易结果时写入；
+     * 排队中、交易中一律为 null。
      *
-     * <p><b>TODO（等陈星宇 C-1 落地后由我改）</b>：给 {@code Intent} 增加 {@code dealtAt}
-     * 字段并在标记交易结果时写入，届时本方法直接返回 {@code intent.getDealtAt()}，
-     * 不再回查商品，也不再依赖 {@code closedAt}。
+     * <p><b>历史变更</b>：PR #2 时 {@code Intent} 尚无成交时间列，本方法临时回查
+     * {@code Product.closedAt} 代替，并留下 TODO。C-1 落地后（develop 提交 7a8bdb5）
+     * 本方法已改为直接读 {@code dealtAt}，不再回查商品表、不再依赖下架时间，
+     * 历史列表的「交易时间」从此是真成交时间而非商品下架时间。
      */
     private LocalDateTime dealTime(Intent intent) {
         if (intent.getStatus() == Intent.Status.QUEUED || intent.getStatus() == Intent.Status.IN_TRANSACTION) {
             return null;
         }
-        return productRepository.findById(intent.getProductId())
-                .map(Product::getClosedAt)
-                .orElse(null);
+        return intent.getDealtAt();
     }
 
     /** 商品名称；商品已被删除时给空串，避免历史列表整条报错 */
