@@ -213,7 +213,7 @@ body {
 .filter-bar input[type=text]:focus, .filter-bar select:focus { border-color: var(--primary); background: #fff; }
 .filter-bar select:disabled { opacity: .55; cursor: not-allowed; }
 
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 16px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
 .pcard {
   border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
   background: #fff; cursor: pointer; transition: box-shadow .15s, transform .15s;
@@ -311,3 +311,91 @@ body {
 .privacy { font-size: 14px; line-height: 1.8; color: var(--text-2); }
 .privacy p { margin-bottom: 10px; }
 .privacy .li { padding-left: 4px; margin-bottom: 6px; }
+
+/* ---------- 列表页补充（US-16 / J-2）与详情页提交意向（US-17 / J-3） ---------- */
+.list-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.list-hint { color: var(--text-2); font-size: 12px; }
+.list-note { margin-top: 14px; color: var(--text-2); font-size: 12px; line-height: 1.7; }
+#pager { justify-content: center; }
+/* 手动冻结（卖家停售）：与交易中区分，按裁决 C11「不可提交」 */
+.badge.paused { background: #eceff5; color: var(--text-2); }
+
+.back-link { display: inline-block; margin-bottom: 12px; color: var(--text-2); font-size: 13px; text-decoration: none; }
+.back-link:hover { color: var(--primary); text-decoration: underline; }
+.detail .kv-line { color: var(--text-2); font-size: 13px; line-height: 1.9; }
+.detail .actions { margin-top: 16px; }
+.detail .actions .btn:disabled { opacity: .55; cursor: not-allowed; }
+.hint-banner {
+  margin-top: 14px; padding: 9px 12px; border-radius: 8px; font-size: 12px; line-height: 1.6;
+  background: #fff8e8; border: 1px solid #f3e1bc; color: #8a5b00;
+}
+.thumb { position: relative; }
+.thumb-no {
+  position: absolute; right: 2px; bottom: 2px; min-width: 14px; height: 14px; line-height: 14px;
+  border-radius: 4px; background: rgba(20, 28, 44, .62); color: #fff; font-size: 10px; text-align: center;
+}
+.pic-tip { margin-top: 8px; color: var(--text-2); font-size: 12px; }
+@media (max-width: 640px) {
+  .list-head { flex-direction: column; align-items: flex-start; }
+}
+
+/* ---------- 列表页顶栏搜索（US-16 线框图） ---------- */
+.topbar-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.topbar-tools input[type=text] {
+  width: 190px; padding: 8px 12px; border: none; border-radius: 8px;
+  font-size: 13px; font-family: inherit; outline: none; background: #fff; color: var(--text);
+}
+.btn-search { background: #fff; color: var(--primary); padding: 8px 16px; font-size: 13px; border-radius: 8px; }
+.btn-search:hover:not(:disabled) { background: #eef3fe; }
+.topbar-user { display: inline-flex; align-items: center; gap: 10px; font-size: 13px; }
+.topbar-user a.topbar-btn {
+  border: 1px solid rgba(255, 255, 255, .8); padding: 5px 14px; border-radius: 8px;
+}
+.topbar-admin {
+  color: #fff; font-size: 13px; text-decoration: none; opacity: .8;
+  margin-left: 2px; padding-left: 12px; border-left: 1px solid rgba(255, 255, 255, .35);
+}
+.topbar-admin:hover { opacity: 1; text-decoration: underline; }
+
+/* ---------- 类别筛选条（US-16 线框图：全部 / 数码 ▾ / 生活 ▾） ---------- */
+.cat-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px 16px; margin-bottom: 14px; flex-wrap: wrap;
+}
+.cat-tabs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.cat-tab-wrap { position: relative; }
+.cat-tab {
+  border: none; background: none; font-family: inherit; font-size: 14px; color: var(--text);
+  padding: 6px 10px; border-radius: 8px; cursor: pointer; white-space: nowrap;
+}
+.cat-tab:hover { background: #e9eefb; }
+.cat-tab.active { color: var(--primary); font-weight: 700; background: #e7edfd; }
+.cat-tab .caret {
+  display: inline-block; width: 0; height: 0; margin-left: 5px; vertical-align: middle;
+  border-left: 4px solid transparent; border-right: 4px solid transparent;
+  border-top: 5px solid currentColor; opacity: .6;
+}
+.cat-menu {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 30; min-width: 150px;
+  background: #fff; border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(28, 35, 51, .14); padding: 6px;
+}
+.cat-menu[hidden] { display: none; }
+.cat-menu-item {
+  display: block; width: 100%; text-align: left; border: none; background: none;
+  font-family: inherit; font-size: 13px; color: var(--text); padding: 8px 10px;
+  border-radius: 6px; cursor: pointer;
+}
+.cat-menu-item:hover { background: #eef3fe; color: var(--primary); }
+
+/* 卡片：主图（无图显示「占位图」）→ 名称 → 价格 → 发布时间（US-16 线框图） */
+.pcard .pic { aspect-ratio: 4 / 3; background: #fafbfd; border-bottom: 1px dashed var(--border); }
+.pic-ph { color: #97a1b8; font-size: 12px; }
+.pcard .body { gap: 6px; }
+.pcard .price { font-size: 15px; }
+
+/* ---------- 我的历史（US-19） ---------- */
+#histBody .table th { padding: 10px; background: #fafbfd; }
+#histBody .table td { font-size: 13px; }
+#histBody .empty a { display: inline-block; margin-top: 10px; color: var(--primary); }
+

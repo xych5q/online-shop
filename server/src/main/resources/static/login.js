@@ -48,6 +48,13 @@ async function initLoginPage() {
   }
 }
 
+/* 登录成功后跳回来源页（详情页点「立即购买」会带 ?next=），否则回首页 */
+function nextUrl() {
+  const next = new URLSearchParams(location.search).get('next');
+  if (next && next.charAt(0) === '/' && next.charAt(1) !== '/') return next;
+  return '/';
+}
+
 /* ---------- 登录 ---------- */
 async function submitLogin() {
   const username = $('#loginUser').value.trim();
@@ -62,7 +69,7 @@ async function submitLogin() {
     const data = await api('/api/buyers/login', { method: 'POST', body: { username, password } });
     saveBuyerSession(data.token, data.username);
     toast('登录成功', 'ok');
-    setTimeout(() => { location.href = '/'; }, 700);
+    setTimeout(() => { location.href = nextUrl(); }, 700);
   } catch (e) {
     err.textContent = e.message;
   }

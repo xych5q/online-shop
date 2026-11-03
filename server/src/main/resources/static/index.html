@@ -8,88 +8,31 @@
 </head>
 <body>
 <div class="container">
+  <!-- 顶栏（US-16 线框图）：标题 + 搜索框 + 搜索按钮 + 登录入口 -->
   <div class="topbar">
     <div>
       <h1>好物排队购</h1>
-      <div class="sub">先到先得 · 线下当面交易</div>
+      <div class="sub">在线购物 · 先到先得 · 线下当面交易</div>
     </div>
-    <div class="topbar-links">
-      <span id="topbarUser"></span>
-      <a href="/admin.html">卖家入口 →</a>
-    </div>
-  </div>
-
-  <!-- 搜索与类别筛选（US-16 / J-2）：依赖 GET /api/products、GET /api/categories/tree -->
-  <div class="card" id="filterCard">
-    <div class="filter-bar">
-      <input type="text" id="searchInput" placeholder="搜索商品名称或描述，多个关键词用空格分隔" maxlength="100">
-      <button class="btn btn-primary" id="searchBtn">搜索</button>
-    </div>
-    <div class="filter-bar" style="margin-top:10px">
-      <select id="cat1"><option value="">全部一级类别</option></select>
-      <select id="cat2"><option value="">全部二级类别</option></select>
+    <div class="topbar-tools">
+      <input type="text" id="searchInput" placeholder="搜索商品名称或描述" maxlength="100">
+      <button class="btn btn-search" id="searchBtn">搜索</button>
+      <span id="topbarUser" class="topbar-user"></span>
+      <a href="/admin.html" class="topbar-admin">卖家入口</a>
     </div>
   </div>
 
-  <!-- 商品列表（US-16 / J-2）：主图/占位图、名称、类别、价格、发布时间，按发布时间倒序 -->
-  <div class="card" id="listCard">
-    <div class="section-title">在售商品</div>
-    <div class="grid" id="productGrid"></div>
-    <div class="empty" id="listEmpty" style="display:none">没有找到相关商品</div>
-    <div class="pager" id="pager"></div>
+  <!-- 类别筛选（US-16 线框图）：全部 / 一级类别 ▾（点开列二级，可叠加关键词） -->
+  <div class="cat-row">
+    <div class="cat-tabs" id="catTabs"></div>
+    <div class="list-hint" id="listHint"></div>
   </div>
 
-  <!-- 旧单商品区块：GET /api/product 已废弃，按约定暂不删除其调用，故保留隐藏容器 -->
-  <div class="card" id="productCard" hidden>
-    <div id="productArea"></div>
-  </div>
-
-  <!-- 我的排队 -->
-  <div class="card">
-    <h2>我的排队</h2>
-    <div class="lookup-bar">
-      <input type="text" id="codeInput" placeholder="输入口令码，查询排队位次" maxlength="8" style="text-transform:uppercase">
-      <button class="btn btn-primary" id="lookupBtn">查询</button>
-    </div>
-    <div class="lookup-result" id="lookupResult"></div>
-  </div>
-</div>
-
-<!-- 购买弹窗 -->
-<div class="modal-mask" id="buyMask">
-  <div class="modal">
-    <button class="close-x" data-close="buyMask">×</button>
-    <h3>提交购买意向</h3>
-    <div class="form">
-      <div>
-        <label>姓名<span class="req">*</span></label>
-        <input type="text" id="buyName" maxlength="50" placeholder="你的姓名">
-      </div>
-      <div>
-        <label>联系电话<span class="req">*</span></label>
-        <input type="text" id="buyPhone" maxlength="30" placeholder="用于卖家线下联系你">
-      </div>
-      <div class="error" id="buyError"></div>
-      <button class="btn btn-primary btn-block" id="buySubmit">确认提交，加入排队</button>
-    </div>
-  </div>
-</div>
-
-<!-- 口令码成功弹窗 -->
-<div class="modal-mask" id="codeMask">
-  <div class="modal">
-    <h3 style="text-align:center">提交成功，已加入排队！</h3>
-    <div class="code-box">
-      <div class="tip">你的专属口令码（仅显示这一次）</div>
-      <div class="code" id="codeText"></div>
-      <button class="btn btn-outline btn-sm" id="copyCode">复制口令码</button>
-      <div class="warn">⚠️ 口令码只显示这一次，之后系统不会再展示，请务必截图或抄写保存。<br>凭口令码可查询排队位次、修改联系信息、撤销意向。</div>
-    </div>
-    <div class="divider"></div>
-    <div style="text-align:center">
-      <button class="btn btn-primary" id="codeDone">我已保存好口令码</button>
-    </div>
-  </div>
+  <!-- 商品列表（US-16）：只显示在售商品，默认按发布时间倒序，每页 12 条 -->
+  <div class="grid" id="productGrid"></div>
+  <div class="empty" id="listEmpty" style="display:none">没有找到相关商品</div>
+  <div class="pager" id="pager"></div>
+  <div class="list-note">列表只显示在售商品（冻结中 / 交易中 / 已售罄的商品不出现）；无结果时显示空状态「没有找到相关商品」。</div>
 </div>
 
 <div class="toast" id="toast"></div>
