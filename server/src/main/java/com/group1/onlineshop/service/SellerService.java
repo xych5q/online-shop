@@ -106,12 +106,14 @@ public class SellerService {
      * 业务规则：detail 为当前活跃（在售或冻结）商品及其队列/当前交易/待处置失败意向，无活跃商品时 detail 为 null；
      * queue 按提交时间正序并带 position（从 1 开始）；
      * currentDeal 与 pendingFailed 均不含口令码 code；
-     * canPublish 为 true 表示当前无在售/交易中商品（可发布新品）。
+     * canPublish 为 true 表示当前无在售/交易中商品，或当前商品仅处于售罄态（多商品发布始终允许发布新品）。
      */
     public Map<String, Object> overview(String token) {
         requireAuth(token);
+        // 售罄商品属于「当前商品」（评审意见）：仍显示在后台当前商品卡片，标「已售罄」并给补货入口（A.1.3-5）
         Product product = productRepository
-                .findFirstByStatusInOrderByCreatedAtAsc(List.of(Product.Status.ON_SALE, Product.Status.FROZEN))
+                .findFirstByStatusInOrderByCreatedAtAsc(
+                        List.of(Product.Status.ON_SALE, Product.Status.FROZEN, Product.Status.SOLD_OUT))
                 .orElse(null);
 
         Map<String, Object> detail = null;
@@ -153,7 +155,8 @@ public class SellerService {
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("detail", detail);
-        result.put("canPublish", detail == null);
+        result.put("canPublish", detail == null
+                || product.getStatus() == Product.Status.SOLD_OUT);
         return result;
     }
 

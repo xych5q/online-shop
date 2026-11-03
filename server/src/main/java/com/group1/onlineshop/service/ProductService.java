@@ -76,7 +76,8 @@ public class ProductService {
      *   7. 图片沿用 data:image/(jpeg|png);base64 约定（单张 ≤5MB），解码落盘，
      *      文件名逐条写入 product_image 表（sortOrder 从 0 起，最小者为主图，与迁移脚本约定一致），
      *      并把主图文件名写入 Product.image 兼容旧展示字段；
-     * 发布成功后商品状态直接为在售（无独立「上架」动作）；商品发布后不可修改（A.1.1-3）。
+     * 发布成功后商品状态直接为在售（无独立「上架」动作）；商品发布后不可修改（A.1.1-3）；
+     * 成功返回 {ok:true, id}——id 为新商品 id（评审意见：避免前端发布后重拉列表）。
      *
      * DTO 注解校验失败时由 GlobalExceptionHandler 先行拦截（400 + 第一条错误文案），
      * 本方法内的校验为服务层二次防御（绕过 DTO 直接调用时同样生效）。
@@ -148,7 +149,11 @@ public class ProductService {
             product.setImage(imageList.get(0).getFilename());
             productRepository.save(product);
         }
-        return ok();
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", true);
+        result.put("id", product.getId());
+        return result;
     }
 
     /**
