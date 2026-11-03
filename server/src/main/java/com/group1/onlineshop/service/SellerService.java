@@ -1,9 +1,11 @@
 package com.group1.onlineshop.service;
 
+import com.group1.onlineshop.entity.Buyer;
 import com.group1.onlineshop.entity.Intent;
 import com.group1.onlineshop.entity.Product;
 import com.group1.onlineshop.entity.Seller;
 import com.group1.onlineshop.exception.BizException;
+import com.group1.onlineshop.repository.BuyerRepository;
 import com.group1.onlineshop.repository.IntentRepository;
 import com.group1.onlineshop.repository.ProductImageRepository;
 import com.group1.onlineshop.repository.ProductRepository;
@@ -34,6 +36,7 @@ public class SellerService {
     private final ProductRepository productRepository;
     private final IntentRepository intentRepository;
     private final ProductImageRepository productImageRepository;
+    private final BuyerRepository buyerRepository;
 
     /** BCrypt 编码器：登录校验与修改密码后重新编码（BCrypt 自带随机盐） */
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -223,6 +226,107 @@ public class SellerService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("product", productJson);
         result.put("intents", intents);
+        return result;
+    }
+
+    /**
+     * 客户列表（卖家后台）。
+     * 规则：需卖家鉴权；返回全部已注册买家，按注册时间倒序；
+     * 只返回 {id,username,phone,defaultLocation,createdAt}——绝不返回 passwordHash 与登录 token（隐私）。
+     */
+    public Map<String, Object> customers(String token) {
+        requireAuth(token);
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (Buyer b : buyerRepository.findAllByOrderByCreatedAtDesc(Pageable.unpaged())) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", b.getId());
+            m.put("username", b.getUsername());
+            m.put("phone", b.getPhone());
+            m.put("defaultLocation", b.getDefaultLocation());
+            m.put("createdAt", b.getCreatedAt());
+            items.add(m);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", true);
+        result.put("total", items.size());
+        result.put("items", items);
+        return result;
+    }
+
+    /**
+     * 购买历史 · 维度一：按客户看。
+     * 规则：需卖家鉴权；客户不存在 404「客户不存在」；返回该买家的全部意向历史
+     * （排除归档 ARCHIVED），按提交时间倒序、每页 10 条、page 从 1 开始；
+     * 每条含 {id,productId,productName,status,submittedAt,dealtAt}，绝不包含口令码。
+     */
+    public Map<String, Object> customerHistory(String token, long buyerId, Integer page) {
+        requireAuth(token);
+        if (!buyerRepository.existsById(buyerId)) {
+            throw new BizException("客户不存在", 404);
+        }
+        long total = intentRepository.countByBuyerIdAndStatusNot(buyerId, Intent.Status.ARCHIVED);
+        int totalPages = (int) Math.max(1, (total + historyPageSize - 1) / historyPageSize);
+        int cur = Math.min(Math.max(1, page == null ? 1 : page), totalPages);
+        Pageable pageable = PageRequest.of(cur - 1, historyPageSize);
+
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (Intent it : intentRepository.findByBuyerIdAndStatusNotOrderBySubmittedAtDescIdDesc(
+                buyerId, Intent.Status.ARCHIVED, pageable)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", it.getId());
+            m.put("productId", it.getProductId());
+            m.put("productName", productRepository.findById(it.getProductId())
+                    .map(Product::getName).orElse(null));
+            m.put("status", it.getStatus().name().toLowerCase());
+            m.put("submittedAt", it.getSubmittedAt());
+            m.put("dealtAt", it.getDealtAt());
+            items.add(m);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", true);
+        result.put("page", cur);
+        result.put("totalPages", totalPages);
+        result.put("total", total);
+        result.put("items", items);
+        return result;
+    }
+
+    /**
+     * 购买历史 · 维度二：按商品看意向购买人。
+     * 规则：需卖家鉴权；商品不存在 404「商品不存在」；返回该商品的全部意向（含已下架商品的历史意向），
+     * 按提交时间正序；每条含 {id,buyerId,username,phone,status,position,submittedAt,dealtAt}——
+     * position 仅对排队中（QUEUED）意向计算（从 1 起）；绝不包含口令码。
+     */
+    public Map<String, Object> productIntents(String token, long productId) {
+        requireAuth(token);
+        if (!productRepository.existsById(productId)) {
+            throw new BizException("商品不存在", 404);
+        }
+        List<Map<String, Object>> items = new ArrayList<>();
+        int queued = 0;
+        for (Intent it : intentRepository.findByProductIdOrderBySubmittedAtAsc(productId)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", it.getId());
+            m.put("buyerId", it.getBuyerId());
+            Buyer buyer = it.getBuyerId() == null ? null : buyerRepository.findById(it.getBuyerId()).orElse(null);
+            m.put("username", buyer == null ? null : buyer.getUsername());
+            m.put("phone", it.getPhone() == null ? (buyer == null ? null : buyer.getPhone()) : it.getPhone());
+            m.put("status", it.getStatus().name().toLowerCase());
+            if (it.getStatus() == Intent.Status.QUEUED) {
+                queued++;
+                m.put("position", queued);
+            } else {
+                m.put("position", null);
+            }
+            m.put("submittedAt", it.getSubmittedAt());
+            m.put("dealtAt", it.getDealtAt());
+            items.add(m);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", true);
+        result.put("total", items.size());
+        result.put("items", items);
         return result;
     }
 

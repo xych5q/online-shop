@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Map;
 
 /**
- * 卖家端控制器：15 个 /api/seller/ 接口（12 个迭代 1 接口 + 3 个后台管理接口）。
+ * 卖家端控制器：18 个 /api/seller/ 接口（12 个迭代 1 接口 + 3 个后台管理接口 + 1 个客户列表 + 2 个购买历史两维度）。
  * 业务规则与入参出参以 docs/design/接口设计.md 与 docs/design/接口设计-卖家后台管理.md 为准。
  * 鉴权：除 login 外，均从请求头 X-Token（或 Authorization: Bearer）取 token，校验失败抛 401「未登录或登录已失效」。
  */
@@ -184,6 +184,34 @@ public class SellerController {
     @GetMapping("/api/seller/history/{id}")
     public Map<String, Object> historyDetail(HttpServletRequest request, @PathVariable long id) {
         return sellerService.historyDetail(token(request), id);
+    }
+
+    /**
+     * 客户列表：返回全部已注册买家 {id,username,phone,defaultLocation,createdAt}，按注册时间倒序；
+     * 绝不返回 passwordHash 与登录 token（隐私）。
+     */
+    @GetMapping("/api/seller/customers")
+    public Map<String, Object> customers(HttpServletRequest request) {
+        return sellerService.customers(token(request));
+    }
+
+    /**
+     * 购买历史 · 按客户看：某买家的意向历史（排除归档），按提交时间倒序、每页 10 条（?page=n 从 1 起）；
+     * 客户不存在 404「客户不存在」；绝不包含口令码。
+     */
+    @GetMapping("/api/seller/customers/{id}/history")
+    public Map<String, Object> customerHistory(HttpServletRequest request, @PathVariable long id,
+                                               @RequestParam(required = false) Integer page) {
+        return sellerService.customerHistory(token(request), id, page);
+    }
+
+    /**
+     * 购买历史 · 按商品看意向购买人：某商品的全部意向（含已下架商品的历史意向），按提交时间正序；
+     * 排队中意向带 position（从 1 起）；商品不存在 404「商品不存在」；绝不包含口令码。
+     */
+    @GetMapping("/api/seller/products/{id}/intents")
+    public Map<String, Object> productIntents(HttpServletRequest request, @PathVariable long id) {
+        return sellerService.productIntents(token(request), id);
     }
 
     /** 鉴权：token 无效时由 SellerService 抛 401「未登录或登录已失效」 */
