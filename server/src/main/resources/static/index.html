@@ -28,11 +28,11 @@
     <div class="list-hint" id="listHint"></div>
   </div>
 
-  <!-- 商品列表（US-16）：只显示在售商品，默认按发布时间倒序，每页 12 条 -->
+  <!-- 商品列表（US-16 / 裁决 C11）：在售 + 交易中（交易中仍可提交意向），按发布时间倒序，每页 12 条 -->
   <div class="grid" id="productGrid"></div>
   <div class="empty" id="listEmpty" style="display:none">没有找到相关商品</div>
   <div class="pager" id="pager"></div>
-  <div class="list-note">列表只显示在售商品（冻结中 / 交易中 / 已售罄的商品不出现）；无结果时显示空状态「没有找到相关商品」。</div>
+  <div class="list-note">列表显示「在售」与「交易中」商品（交易中仍可提交意向排队，卡片上标注）；卖家暂停接单、已售罄、已下架的商品不出现。无结果时显示空状态「没有找到相关商品」。</div>
 </div>
 
 <div class="toast" id="toast"></div>

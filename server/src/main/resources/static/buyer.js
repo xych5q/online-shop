@@ -1,8 +1,10 @@
 /* 买家端 · 商品列表页逻辑（US-16 / J-2）
    依赖接口：GET /api/products、GET /api/categories/tree（J-1 已交付）
-   列表口径（US-16 验收判据 5 + 线框图脚注）：只显示「在售」商品，
-   冻结中（交易中 / 卖家暂停接单）与已售罄都不出现在列表；
-   两类冻结的文案区分只发生在详情页（接口设计 v2 §五 裁决 C11）。 */
+   列表口径（接口设计 v2 §五 裁决 C11）：
+     ON_SALE           → 显示，卡片无徽标，可提交
+     FROZEN + auto     → 显示，卡片标「交易中 · 仍可提交意向」，可提交
+     FROZEN + manual   → 不显示（卖家暂停接单）
+     SOLD_OUT / OFF_SHELF 后端不返回，前端不处理。 */
 const $ = (s) => document.querySelector(s);
 
 function toast(msg, type) {
@@ -129,6 +131,15 @@ function syncUrl() {
   history.replaceState(null, '', s ? '/?' + s : '/');
 }
 
+/* 卡片状态徽标位（裁决 C11）：在售不占位；交易中（frozenBy=auto）标注仍可提交；
+   卖家暂停接单的不会进入列表，故此处不出现「暂停接单」 */
+function cardBadge(p) {
+  if (p.status === 'frozen' && p.frozenBy === 'auto') {
+    return '<div class="pcard-badge"><span class="badge frozen">交易中 · 仍可提交意向</span></div>';
+  }
+  return '';
+}
+
 function renderCard(p) {
   const pic = p.imageUrl
     ? `<img src="${esc(p.imageUrl)}" alt="${esc(p.name)}" loading="lazy">`
@@ -138,6 +149,7 @@ function renderCard(p) {
       <div class="pic">${pic}</div>
       <div class="body">
         <div class="name">${esc(p.name)}</div>
+        ${cardBadge(p)}
         <div class="price"><small>￥</small>${fmtPrice(p.price)}</div>
         <div class="time">${fmtTime(p.publishedAt)}</div>
       </div>
@@ -168,15 +180,15 @@ async function loadList() {
   try {
     const data = await api('/api/products?' + q.toString());
     state.totalPages = data.totalPages || 0;
-    /* 后端 VISIBLE 含 FROZEN（接口设计 v2 §五：frozenBy 供详情页区分文案），
-       US-16 要求列表不出现冻结商品，故在展示层只保留 on_sale */
-    const items = (data.items || []).filter((p) => p.status === 'on_sale');
+    /* 裁决 C11 的列表口径：后端 VISIBLE = ON_SALE + FROZEN，
+       这里只剔除「卖家暂停接单」（FROZEN 且 frozenBy=manual）；
+       交易中（FROZEN 且 frozenBy=auto）保留在列表，卡片标徽标、详情页可提交意向 */
+    const items = (data.items || []).filter((p) => !(p.status === 'frozen' && p.frozenBy === 'manual'));
     const grid = $('#productGrid');
     const label = currentLabel();
-    /* 提示文案对齐 US-16 线框图右侧注释「共 12 条 / 页 · 按发布时间倒序」：
-       后端 total 含冻结商品，与展示层过滤后的条数不一致，故不展示总数，只说明每页条数与排序 */
+    /* 提示文案（US-16 线框图右侧注释）：总数 + 每页条数 + 排序口径 */
     $('#listHint').textContent =
-      (label ? `筛选：${label} · ` : '') + `每页 ${state.pageSize} 条 · 按发布时间倒序`;
+      (label ? `筛选：${label} · ` : '') + `共 ${data.total || 0} 条 · 每页 ${state.pageSize} 条 · 按发布时间倒序`;
     if (!items.length) {
       grid.innerHTML = '';
       $('#listEmpty').style.display = 'block';

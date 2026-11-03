@@ -2,7 +2,7 @@
    依赖接口：GET /api/products/{id}、GET /api/categories/tree（J-1 已交付）、
              POST /api/intents（W-3 已交付：买家登录态，入参 {productId}）
    冻结语义（裁决 C11）：frozenBy = auto 交易中仍可提交意向；manual 卖家停售不可提交
-   富文本：本版仍按纯文本转义展示（富文本渲染另开任务） */
+   富文本：白名单净化后渲染（标签/属性白名单 + 危险协议过滤，见 sanitizeRich） */
 const $ = (s) => document.querySelector(s);
 
 let currentProduct = null;
@@ -50,6 +50,83 @@ async function api(path, opts) {
     throw err;
   }
   return data;
+}
+
+/* ---------- 富文本净化（US-17 / J-3） ----------
+   用 DOMParser 在惰性文档中解析：该文档无浏览上下文，脚本不会执行；
+   随后按白名单重建：允许的标签保留并过滤属性，未知标签「拆壳留文本」，危险标签整段丢弃。
+   白名单之外的属性（含全部 on* 事件、style、srcdoc 等）一律移除。 */
+const RICH_TAGS = {
+  p: [], br: [], div: [], span: [], hr: [],
+  strong: [], b: [], em: [], i: [], u: [], s: [], del: [], ins: [], sub: [], sup: [],
+  h1: [], h2: [], h3: [], h4: [], h5: [], h6: [],
+  ul: [], ol: [], li: [], blockquote: [], pre: [], code: [],
+  table: [], thead: [], tbody: [], tr: [], th: [], td: [],
+  a: ['href', 'title', 'target'],
+  img: ['src', 'alt', 'width', 'height'],
+};
+const RICH_DROP = new Set([
+  'script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet',
+  'form', 'input', 'button', 'textarea', 'select', 'option', 'optgroup', 'label',
+  'link', 'meta', 'base', 'svg', 'math', 'template', 'noscript', 'audio', 'video', 'source',
+]);
+
+/* 链接与图片地址：只放行 http/https/mailto、站内绝对路径与锚点；
+   javascript: / data: / 协议相对 //host 一律丢弃（先去掉控制字符与空白再判断，防止 js\tcript: 绕过） */
+function safeUrl(v) {
+  const raw = String(v == null ? '' : v).trim();
+  if (!raw) return false;
+  const compact = raw.replace(/[\u0000-\u0020\u007f]/g, '').toLowerCase();
+  if (compact.charAt(0) === '#') return true;
+  if (compact.charAt(0) === '/') return compact.charAt(1) !== '/';
+  return /^(https?:|mailto:)/.test(compact);
+}
+
+function cleanRich(node) {
+  Array.prototype.slice.call(node.childNodes).forEach((child) => {
+    if (child.nodeType === 8) { node.removeChild(child); return; }   /* 注释 */
+    if (child.nodeType !== 1) return;                                /* 文本节点原样保留 */
+    const tag = child.tagName.toLowerCase();
+    if (RICH_DROP.has(tag)) { node.removeChild(child); return; }
+    cleanRich(child);
+    if (!Object.prototype.hasOwnProperty.call(RICH_TAGS, tag)) {
+      /* 未知标签拆壳：子节点（已净化）上提，文本内容不丢 */
+      while (child.firstChild) node.insertBefore(child.firstChild, child);
+      node.removeChild(child);
+      return;
+    }
+    const allowed = RICH_TAGS[tag];
+    Array.prototype.slice.call(child.attributes).forEach((attr) => {
+      const name = attr.name.toLowerCase();
+      const urlAttr = name === 'href' || name === 'src';
+      const ok = allowed.indexOf(name) > -1 && (!urlAttr || safeUrl(attr.value));
+      if (!ok) child.removeAttribute(attr.name);
+    });
+    if (tag === 'a') {
+      /* 地址被判定为危险（javascript: / data: 等）时，保留文字、去掉假链接，避免看起来可点却没反应 */
+      if (!child.getAttribute('href')) {
+        while (child.firstChild) node.insertBefore(child.firstChild, child);
+        node.removeChild(child);
+        return;
+      }
+      /* 外链统一加 rel，target 只允许 _blank */
+      child.setAttribute('rel', 'noopener noreferrer');
+      if (child.getAttribute('target')) child.setAttribute('target', '_blank');
+    }
+    if (tag === 'img' && !child.getAttribute('src')) node.removeChild(child);
+  });
+}
+
+function sanitizeRich(html) {
+  if (!html) return '';
+  const doc = new DOMParser().parseFromString(
+    '<!DOCTYPE html><html><body><div id="__rich_root">' + String(html) + '</div></body></html>',
+    'text/html'
+  );
+  const root = doc.getElementById('__rich_root');
+  if (!root) return '';
+  cleanRich(root);
+  return root.innerHTML;
 }
 
 /* 类别全路径（一级 / 二级）；拿不到一级名时只显示二级名 */
@@ -121,10 +198,10 @@ function renderDetail(p) {
     <div class="rich" id="rich"></div>
   `;
 
-  /* 富文本先按纯文本展示：textContent 赋值，不解析标签（XSS 安全，富文本渲染另开任务）；
+  /* 富文本渲染：先白名单净化再写入 innerHTML，不裸用后端字符串；
      描述为空时留空，不显示默认文案（US-17 线框图脚注） */
   const rich = $('#rich');
-  if (rich) rich.textContent = p.richDescription || '';
+  if (rich) rich.innerHTML = sanitizeRich(p.richDescription);
 
   const thumbsBox = area.querySelector('.thumbs');
   if (thumbsBox) {
