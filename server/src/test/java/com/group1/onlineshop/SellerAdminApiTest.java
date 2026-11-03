@@ -22,6 +22,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -294,6 +295,24 @@ class SellerAdminApiTest {
                         .header("X-Token", login()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("售罄商品请先补库存"));
+    }
+
+    /** 用例 18（评审验收）：库存调 0 后，售罄商品仍出现在工作台总览（标 sold_out），且 canPublish 为 true。 */
+    @Test
+    void 售罄商品仍出现在总览() throws Exception {
+        Product product = createOnSaleProduct();
+        mockMvc.perform(put("/api/seller/products/" + product.getId() + "/stock")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"stock\":0}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("sold_out"));
+
+        mockMvc.perform(get("/api/seller/overview").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.detail.product.id").value(product.getId()))
+                .andExpect(jsonPath("$.detail.product.status").value("sold_out"))
+                .andExpect(jsonPath("$.canPublish").value(true));
     }
 
     // ---------- 辅助方法 ----------
