@@ -1,11 +1,13 @@
 package com.group1.onlineshop.repository;
 
 import com.group1.onlineshop.entity.Product;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import java.util.List;
@@ -84,4 +86,17 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
 
     /** 按 id 列表取商品（订单历史回填商品名等） */
     List<Product> findByIdIn(List<Long> ids);
+
+    /**
+     * 悲观锁读取商品（交易域专用：自动推进交易、标记交易结果）。
+     *
+     * <p><b>为什么需要当前读</b>：W-4 的首笔自动触发发生在「提交意向」事务内。两个买家并发提交时，
+     * 后到者在 JVM 锁内做普通查询仍可能命中提交前的快照（商品还是 {@code ON_SALE}），
+     * 于是一条队列被推进出两笔 {@code IN_TRANSACTION}——正是 W-7 压测在基线版上测出的缺陷。
+     * 加 {@code FOR UPDATE} 后，后到者会等前者事务提交，从而读到 {@code FROZEN + frozenBy='auto'}，
+     * 幂等返回「已有交易」，本笔正常留在队列。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from Product p where p.id = :id")
+    Optional<Product> lockById(@Param("id") Long id);
 }

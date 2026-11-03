@@ -57,9 +57,11 @@ public class IntentService {
      * <p>入参由控制器给出：{@code buyer} 为 {@code BuyerService.requireAuth(token)} 解析出的当前账号，
      * {@code productId} 为目标商品（多商品场景必须指定，FR-C1）。
      *
-     * <p>规则：商品不存在 → 400「商品不存在」；已下架 / 售罄 → 400「商品已下架」；
-     * 非在售（冻结 / 交易中）→ 400「商品交易中，暂停接收新意向」；库存为 0 → 400「商品已售罄」。
-     * 提交成功后，若该商品当前无进行中的交易，则由 {@link TradeService#enterDeal(Product)} 让队首自动进入交易（W-4）。
+     * <p>规则（SRS v1.6 裁决 C11）：商品不存在 → 400「商品不存在」；已下架 / 售罄 → 400「商品已下架」；
+     * <b>手动冻结</b>（卖家停售）→ 400「卖家已暂停接单，暂不接收新意向」；
+     * <b>自动冻结</b>（交易进行中）<b>仍接收新意向</b>，队列继续累积（A.1.3-4：只有库存归零、商品下架才停止收新意向）；
+     * 库存为 0 → 400「商品已售罄」。
+     * 提交成功后，若该商品当前无进行中的交易，由 {@link TradeService#tryStartDeal(Product)} 让队首自动进入交易（W-4）。
      *
      * @param buyer     当前登录买家（登录态由控制器保证）
      * @param productId 目标商品 id
@@ -75,8 +77,9 @@ public class IntentService {
         if (product.getStatus() == Product.Status.OFF_SHELF || product.getStatus() == Product.Status.SOLD_OUT) {
             throw new BizException("商品已下架");
         }
-        if (product.getStatus() != Product.Status.ON_SALE) {
-            throw new BizException("商品交易中，暂停接收新意向");
+        // 裁决 C11：两类冻结分开处理——自动冻结=交易进行中，仍可排队；手动冻结=卖家停售，不接收
+        if (product.getStatus() == Product.Status.FROZEN && !"auto".equals(product.getFrozenBy())) {
+            throw new BizException("卖家已暂停接单，暂不接收新意向");
         }
         if (product.getStock() == null || product.getStock() < 1) {
             throw new BizException("商品已售罄");
@@ -93,11 +96,9 @@ public class IntentService {
         intent.setDisposed(false);
         intentRepository.save(intent);
 
-        // ⚠️ W-4 挂起（2026-10-21）：「队首提交后立即自动进入交易」的触发时机存在需求冲突，待组长 / 需求方裁定后再补。
-        // 冲突：SRS 4.1 触发条件「在售且有排队意向 → 队首自动进交易」+「冻结期间不接收新意向」+ Q6 裁定「队列必须能形成」三者不可兼得
-        //      ——若提交即进交易并冻结，第二位之后买家被拒，队列最多 1 人，「排队是核心功能」失效。
-        // 挂起期间沿用迭代 1 现状：提交只入队，由卖家在后台触发首次进入交易；交易结束后由系统自动推进下一位（Q7 裁定，无争议）。
-        // 裁定后在此补：if (!tradeService.hasActiveDeal(product.getId())) { tradeService.enterDeal(product); }
+        // W-4 / 裁决 C11：首笔由提交成功后自动触发——无进行中的交易则立即推进队首；
+        // 已有交易时本笔正常留在队列（tryStartDeal 幂等返回 false，不抛异常，自动冻结期间本就允许继续排队）。
+        tradeService.tryStartDeal(product);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("intent", intentJson(intent));

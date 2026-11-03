@@ -157,7 +157,7 @@ function renderOverview(data) {
         <span class="muted">意向提交于 ${fmtTime(d.currentDeal.submittedAt)}</span>
       </div>
       <div class="actions">
-        <button class="btn btn-primary" id="markSuccess">✅ 标记交易成功（下架进历史）</button>
+        <button class="btn btn-primary" id="markSuccess">✅ 标记交易成功（扣 1 件，有剩继续卖）</button>
         <button class="btn btn-danger" id="markFail">❌ 标记交易失败（自动递补）</button>
       </div>
       <div class="hint" style="margin-top:10px;color:var(--text-2);font-size:12px">提示：交易标记后不可回退，请线下确认后再操作。</div>
@@ -165,11 +165,10 @@ function renderOverview(data) {
   } else if (p.status === 'on_sale') {
     dealInfo = `
       <div class="actions">
-        <button class="btn btn-primary" id="enterDeal" ${d.queue.length ? '' : 'disabled'}>与队首进入交易</button>
         <button class="btn btn-outline" id="freezeBtn">手动冻结</button>
         <button class="btn btn-ghost" id="offshelfBtn">手动下架</button>
       </div>
-      ${d.queue.length ? '' : '<div class="hint" style="margin-top:10px;color:var(--text-2);font-size:12px">尚无买家排队，暂不能进入交易。</div>'}
+      <div class="hint" style="margin-top:10px;color:var(--text-2);font-size:12px">买家提交意向后，系统自动与队首进入交易，无需手动操作。</div>
     `;
   } else if (p.frozenBy === 'manual') {
     dealInfo = `
@@ -196,10 +195,6 @@ function renderOverview(data) {
   `;
 
   const bind = (sel, fn) => { const el = $(sel); if (el) el.addEventListener('click', fn); };
-  bind('#enterDeal', async () => {
-    if (!confirm('确认与队首买家进入交易？商品将自动冻结、停止接收新意向。')) return;
-    await act(`/api/seller/products/${p.id}/deal`, {}, '已进入交易，商品已冻结');
-  });
   bind('#freezeBtn', async () => {
     if (!confirm('确认手动冻结商品？冻结期间不接收新意向，已排队买家保留。')) return;
     await act(`/api/seller/products/${p.id}/freeze`, {}, '商品已手动冻结');

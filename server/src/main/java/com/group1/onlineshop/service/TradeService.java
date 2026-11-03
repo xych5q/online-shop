@@ -9,6 +9,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.PersistenceContext;
+
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -44,17 +48,23 @@ public class TradeService {
     private static final ConcurrentHashMap<Long, Object> DEAL_LOCKS = new ConcurrentHashMap<>();
 
     /**
+     * 事务内一级缓存会让 {@code lockById} 返回「本次事务开始时的旧快照」（比如商品还是 {@code ON_SALE}），
+     * 加锁后必须 refresh 才能真正读到提交后的状态，否则并发提交仍会推进出多条 {@code IN_TRANSACTION}。
+     */
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    /**
      * 队首自动进入交易（严格 FIFO，卖家不可挑人 —— A.2.3-9）。
      *
      * <p><b>冻结触发条件（T2）</b>：取该商品 {@code QUEUED} 队首（{@code submittedAt} 升序、{@code id} 升序兜底）
      * 置 {@code IN_TRANSACTION}，同一事务内商品置 {@code FROZEN} + {@code frozenBy='auto'} + {@code frozenAt=now}。
      *
-     * <p><b>自动触发时机</b>：
+     * <p><b>自动触发时机</b>（SRS v1.6 裁决 C11，W-4 已完成）：
      * <ol>
-     *   <li>⚠️ <b>W-4 挂起</b>：买家登录态提交意向后立即进交易 —— 与「冻结期间不接收新意向」「队列必须能形成」冲突，
-     *       待组长 / 需求方裁定（见 {@code IntentService#submit} 注释）。<b>挂起期间首次进入交易仍由卖家在后台触发</b></li>
-     *   <li>✅ 卖家标记 {@code result=fail} 且队列仍有排队意向 → 下一位自动递补（T5，Q7 裁定，无争议）</li>
-     *   <li>✅ 卖家标记 {@code result=success} 且扣减后 {@code stock>0} → 商品回在售后队首自动进下一笔（T6a，Q7 裁定，无争议）</li>
+     *   <li>✅ 买家提交意向成功后，若该商品<b>没有进行中的交易</b> → 立即推进队首（{@link #tryStartDeal(Product)}）</li>
+     *   <li>✅ 卖家标记 {@code result=fail} 且队列仍有排队意向 → 下一位自动递补（T5）</li>
+     *   <li>✅ 卖家标记 {@code result=success} 且扣减后 {@code stock>0} → 商品回在售后队首自动进下一笔（T6a）</li>
      * </ol>
      *
      * @param product 目标商品（调用方保证已加载且状态允许）
@@ -71,14 +81,46 @@ public class TradeService {
             if (queue.isEmpty()) {
                 throw new BizException("当前没有排队的买家");
             }
-            Intent head = queue.get(0);
-            head.setStatus(Intent.Status.IN_TRANSACTION);
-            intentRepository.save(head);
-            product.setStatus(Product.Status.FROZEN);
-            product.setFrozenBy("auto");
-            product.setFrozenAt(LocalDateTime.now());
-            productRepository.save(product);
+            startDeal(product, queue.get(0));
         }
+    }
+
+    /**
+     * 提交意向后尝试推进队首（W-4 / 裁决 C11：首笔由提交成功后自动触发）。
+     *
+     * <p>与 {@link #enterDeal(Product)} 的区别：<b>幂等、不走异常流</b>。
+     * 并发提交时后到的那笔会发现「已有交易进行中」，此时它应当<b>正常留在队列里</b>，
+     * 而不是让买家收到 400 —— 自动冻结期间本来就允许继续排队。
+     *
+     * @return {@code true} 表示本次提交把队首推进了交易；{@code false} 表示商品已有进行中的交易或队列为空
+     */
+    @Transactional
+    public boolean tryStartDeal(Product product) {
+        synchronized (dealLock(product.getId())) {
+            // 悲观锁当前读：并发提交时后到者会等前者事务提交，从而读到 FROZEN，不会重复推进
+            Product locked = productRepository.lockById(product.getId())
+                    .orElseThrow(() -> new BizException("商品不存在", 404));
+            entityManager.refresh(locked, LockModeType.PESSIMISTIC_WRITE); // 丢弃一级缓存里的旧快照
+            if (locked.getStatus() != Product.Status.ON_SALE) {
+                return false; // 已有交易（自动冻结）或卖家手动冻结：本笔留在队列
+            }
+            List<Intent> queue = queue(locked.getId());
+            if (queue.isEmpty()) {
+                return false;
+            }
+            startDeal(locked, queue.get(0));
+            return true;
+        }
+    }
+
+    /** 把队首意向置 {@code IN_TRANSACTION} 并冻结商品（调用方必须已持有该商品的 {@link #dealLock(Long)}） */
+    private void startDeal(Product product, Intent head) {
+        head.setStatus(Intent.Status.IN_TRANSACTION);
+        intentRepository.save(head);
+        product.setStatus(Product.Status.FROZEN);
+        product.setFrozenBy("auto");
+        product.setFrozenAt(LocalDateTime.now());
+        productRepository.save(product);
     }
 
     /**
@@ -128,8 +170,13 @@ public class TradeService {
      */
     @Transactional
     public void markResult(Product product, String result) {
+        // 以库内最新状态为准（悲观锁当前读）：调用方可能持有交易开始前的旧实体（长事务、测试直接传实体等），
+        // 若直接回写，会把 enterDeal 刚写入的 FROZEN/frozenBy='auto' 覆盖掉；加锁同时防并发重复标记
+        Product current = productRepository.lockById(product.getId())
+                .orElseThrow(() -> new BizException("商品不存在", 404));
+        entityManager.refresh(current, LockModeType.PESSIMISTIC_WRITE); // 丢弃一级缓存里的旧快照
         Intent deal = intentRepository
-                .findByProductIdAndStatus(product.getId(), Intent.Status.IN_TRANSACTION)
+                .findByProductIdAndStatus(current.getId(), Intent.Status.IN_TRANSACTION)
                 .orElseThrow(() -> new BizException("当前没有进行中的交易"));
 
         if ("success".equals(result)) {
@@ -138,25 +185,25 @@ public class TradeService {
             deal.setDealtAt(LocalDateTime.now()); // A.2.2-2：交易时间写在意向自身，不取商品下架时间
             intentRepository.save(deal);
 
-            int left = (product.getStock() == null ? 0 : product.getStock()) - 1;
-            product.setStock(left);
+            int left = (current.getStock() == null ? 0 : current.getStock()) - 1;
+            current.setStock(left);
 
             if (left > 0) {
                 // T6a：成交不等于下架——商品回在售继续卖，队列不清空
-                product.setStatus(Product.Status.ON_SALE);
-                product.setFrozenBy(null);
-                product.setFrozenAt(null);
-                productRepository.save(product);
-                if (!queue(product.getId()).isEmpty()) {
-                    enterDeal(product); // 队首自动进入下一笔交易
+                current.setStatus(Product.Status.ON_SALE);
+                current.setFrozenBy(null);
+                current.setFrozenAt(null);
+                productRepository.save(current);
+                if (!queue(current.getId()).isEmpty()) {
+                    enterDeal(current); // 队首自动进入下一笔交易
                 }
             } else {
                 // T6b：库存归零 → 售罄下架，队列未成交意向置售罄失效（I6）
-                product.setStatus(Product.Status.SOLD_OUT);
-                product.setOffShelfReason("SOLD_OUT");
-                product.setClosedAt(LocalDateTime.now());
-                productRepository.save(product);
-                for (Intent it : queue(product.getId())) {
+                current.setStatus(Product.Status.SOLD_OUT);
+                current.setOffShelfReason("SOLD_OUT");
+                current.setClosedAt(LocalDateTime.now());
+                productRepository.save(current);
+                for (Intent it : queue(current.getId())) {
                     it.setStatus(Intent.Status.SOLD_OUT);
                     it.setDisposed(true);
                     intentRepository.save(it);
@@ -170,21 +217,21 @@ public class TradeService {
             deal.setDisposed(false);
             deal.setDealtAt(LocalDateTime.now()); // 失败同样有交易结束时间，买家历史要显示「何时失败」
             intentRepository.save(deal);
-            List<Intent> queue = queue(product.getId());
+            List<Intent> queue = queue(current.getId());
             if (!queue.isEmpty()) {
                 // T5：下一位自动递补进入交易，商品保持冻结
                 Intent next = queue.get(0);
                 next.setStatus(Intent.Status.IN_TRANSACTION);
                 intentRepository.save(next);
-                product.setFrozenBy("auto");
-                product.setFrozenAt(LocalDateTime.now());
-                productRepository.save(product);
+                current.setFrozenBy("auto");
+                current.setFrozenAt(LocalDateTime.now());
+                productRepository.save(current);
             } else {
                 // T4：队列无人 → 商品自动恢复在售
-                product.setStatus(Product.Status.ON_SALE);
-                product.setFrozenBy(null);
-                product.setFrozenAt(null);
-                productRepository.save(product);
+                current.setStatus(Product.Status.ON_SALE);
+                current.setFrozenBy(null);
+                current.setFrozenAt(null);
+                productRepository.save(current);
             }
             return;
         }

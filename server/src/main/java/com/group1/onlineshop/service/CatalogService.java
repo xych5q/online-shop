@@ -181,6 +181,8 @@ public class CatalogService {
         m.put("price", p.getPrice());
         m.put("imageUrl", mainImageUrl(p));
         m.put("status", p.getStatus().name().toLowerCase());
+        // 裁决 C11：买家端要区分两类冻结文案——auto=交易中（仍可提交意向）、manual=卖家停售（不可提交）
+        m.put("frozenBy", p.getStatus() == Product.Status.FROZEN ? p.getFrozenBy() : null);
         m.put("categoryId", p.getCategoryId());
         m.put("categoryName", p.getCategoryId() == null ? null : categoryNames.get(p.getCategoryId()));
         m.put("stock", p.getStock());

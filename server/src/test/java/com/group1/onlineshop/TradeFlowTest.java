@@ -9,6 +9,7 @@ import com.group1.onlineshop.repository.BuyerRepository;
 import com.group1.onlineshop.repository.IntentRepository;
 import com.group1.onlineshop.repository.ProductRepository;
 import com.group1.onlineshop.service.IntentService;
+import com.group1.onlineshop.service.ProductService;
 import com.group1.onlineshop.service.TradeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,8 +22,14 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -42,8 +49,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <ul>
  *   <li>意向改绑账号：不再有口令码，{@code submit} 走 {@code Buyer} + {@code productId}，
  *       以 {@code buyerId} / 意向 id 检索，不再用 {@code findByCode}</li>
- *   <li>队首<b>自动</b>进入交易（A.2.3-9）：提交后无需再手动调 {@code enterDeal}，
- *       故旧用例中显式的 {@code enterDeal} 调用已移除</li>
+ *   <li>队首<b>自动</b>进入交易（A.2.3-9 + 裁决 C11）：首笔由提交成功后自动触发，
+ *       故旧用例中显式的 {@code enterDeal} 调用已全部移除；自动冻结期间仍可继续排队</li>
  *   <li>成交不等于下架（A.1.3-4）：旧用例 15「成交即下架、队列剩余全部失败」断言已按新口径改写</li>
  *   <li>已删除旧用例 17 / 18（交易中买家撤销与撤销后恢复在售）——A.2.2-9 买家无取消入口，能力已废止</li>
  * </ul>
@@ -57,6 +64,9 @@ class TradeFlowTest {
 
     @Autowired
     private IntentService intentService;
+
+    @Autowired
+    private ProductService productService;
 
     @Autowired
     private ProductRepository productRepository;
@@ -85,8 +95,7 @@ class TradeFlowTest {
     @Test
     void 交易中手动解冻返回400() throws Exception {
         Product product = createOnSaleProduct("测试商品", 5);
-        submit(buyer("zhangsan", "13800000001"), product);
-        tradeService.enterDeal(product); // W-4 挂起期间：首次进入交易由卖家在后台触发（裁定后改为提交时自动触发）
+        submit(buyer("zhangsan", "13800000001"), product); // 裁决 C11：首笔提交成功后自动进入交易
         // 队首进入交易，商品被自动冻结
         Product reloaded = productRepository.findById(product.getId()).orElseThrow();
         assertEquals(Product.Status.FROZEN, reloaded.getStatus());
@@ -105,9 +114,8 @@ class TradeFlowTest {
         Product product = createOnSaleProduct("测试商品", 5);
         Buyer b1 = buyer("zhangsan", "13800000001");
         Buyer b2 = buyer("lisi", "13800000002");
-        long id1 = submit(b1, product);
-        long id2 = submit(b2, product);
-        tradeService.enterDeal(product); // W-4 挂起期间：卖家后台触发
+        long id1 = submit(b1, product); // 首笔提交后自动进入交易（C11）
+        long id2 = submit(b2, product); // 自动冻结期间仍可排队
 
         assertEquals(Intent.Status.IN_TRANSACTION, intent(id1).getStatus());
         assertEquals(Intent.Status.QUEUED, intent(id2).getStatus());
@@ -133,7 +141,6 @@ class TradeFlowTest {
         long id1 = submit(b1, product);
         long id2 = submit(b2, product);
         long id3 = submit(b3, product);
-        tradeService.enterDeal(product);          // W-4 挂起期间：卖家后台触发
         tradeService.markResult(product, "fail"); // b1 失败，b2 自动递补，b3 仍在排队
         assertEquals(Intent.Status.IN_TRANSACTION, intent(id2).getStatus());
         assertEquals(Intent.Status.QUEUED, intent(id3).getStatus());
@@ -164,8 +171,6 @@ class TradeFlowTest {
         Buyer b2 = buyer("lisi", "13800000002");
         long id1 = submit(b1, product);
         long id2 = submit(b2, product);
-        tradeService.enterDeal(product); // W-4 挂起期间：卖家后台触发
-
         tradeService.markResult(product, "success");
 
         assertEquals(Intent.Status.SUCCESS, intent(id1).getStatus());
@@ -188,8 +193,6 @@ class TradeFlowTest {
         Buyer b2 = buyer("lisi", "13800000002");
         long id1 = submit(b1, product);
         long id2 = submit(b2, product);
-        tradeService.enterDeal(product); // W-4 挂起期间：卖家后台触发
-
         tradeService.markResult(product, "success");
 
         assertEquals(Intent.Status.SUCCESS, intent(id1).getStatus());
@@ -208,7 +211,6 @@ class TradeFlowTest {
         Product product = createOnSaleProduct("测试商品", 1);
         long id1 = submit(buyer("zhangsan", "13800000001"), product);
         long id2 = submit(buyer("lisi", "13800000002"), product);
-        tradeService.enterDeal(product); // W-4 挂起期间：卖家后台触发
         tradeService.markResult(product, "success");
 
         for (long id : List.of(id1, id2)) {
@@ -247,8 +249,8 @@ class TradeFlowTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.intent.intentId").exists())
                 .andExpect(jsonPath("$.intent.code").doesNotExist())
-                // W-4 挂起期间：提交只入队，不立即进入交易
-                .andExpect(jsonPath("$.intent.status").value("queued"));
+                // W-4 / 裁决 C11：首笔提交成功后即自动进入交易
+                .andExpect(jsonPath("$.intent.status").value("in_transaction"));
     }
 
     /** 用例 19（W-3 补充）：listMyIntents 给出买家历史三值展示，交易时间取自 Intent.dealtAt 而非商品下架时间。 */
@@ -265,7 +267,6 @@ class TradeFlowTest {
         assertEquals("二手自行车", queued.get("productName"));
         assertNull(queued.get("dealTime")); // 未成交：无交易时间
 
-        tradeService.enterDeal(product);          // W-4 挂起期间：卖家后台触发
         tradeService.markResult(product, "success");
 
         Map<String, Object> done = intentService.listMyIntents(b.getId(), 1);
@@ -276,27 +277,121 @@ class TradeFlowTest {
     }
 
     /**
-     * 用例 20（W-7 压测暴露的并发缺陷回归）：同一商品已有交易进行中时，再次进入交易必须被拒绝。
+     * 用例 20（裁决 C11 / W-4）：自动冻结（交易进行中）期间仍可提交、队列继续累积，
+     * 且同一商品同一时刻只有一条意向在交易；手动冻结（卖家停售）期间提交被拒，两类文案区分。
      *
-     * <p>基线版（tag {@code v0.1-iter1}）20 并发「进入交易」全部返回 200，库内出现 3 条 IN_TRANSACTION；
-     * 迭代 2 已加按商品 id 的互斥锁 + 进入前二次校验。
+     * <p>同时回归 W-7 压测暴露的并发缺陷：{@code tryStartDeal} 在已有交易时必须幂等返回 false，
+     * 不得把第二条意向推进交易（基线版曾出现 3 条 IN_TRANSACTION）。
      */
     @Test
-    void 已有交易进行中时再次进入交易被拒绝() {
-        Product product = createOnSaleProduct("并发测试商品", 5);
-        submit(buyer("zhangsan", "13800000001"), product);
-        submit(buyer("lisi", "13800000002"), product);
+    void 自动冻结期间仍可排队而手动冻结拒绝提交() {
+        Product product = createOnSaleProduct("自动冻结商品", 5);
+        Buyer b1 = buyer("zhangsan", "13800000001");
+        Buyer b2 = buyer("lisi", "13800000002");
 
-        tradeService.enterDeal(product);
-        assertEquals(1, inTransactionCount(product.getId()));
+        long id1 = submit(b1, product); // 首笔：提交成功即自动进入交易
+        assertEquals(Intent.Status.IN_TRANSACTION, intent(id1).getStatus());
+        Product frozen = productRepository.findById(product.getId()).orElseThrow();
+        assertEquals(Product.Status.FROZEN, frozen.getStatus());
+        assertEquals("auto", frozen.getFrozenBy());
 
-        BizException ex = assertThrows(BizException.class, () -> tradeService.enterDeal(product));
-        assertEquals("已有交易进行中", ex.getMessage());
-        assertEquals(1, inTransactionCount(product.getId())); // 没有被推进第二条
+        long id2 = submit(b2, product); // 自动冻结期间仍可提交，留在队列
+        assertEquals(Intent.Status.QUEUED, intent(id2).getStatus());
+        assertEquals(1, inTransactionCount(product.getId())); // 没有推进第二条
+        assertFalse(tradeService.tryStartDeal(product));       // 幂等：已有交易时不重复推进
 
-        // 标记失败后队列有人 → 自动递补，此时允许再次进入交易
-        tradeService.markResult(product, "fail");
-        assertEquals(1, inTransactionCount(product.getId()));
+        // 手动冻结：卖家停售，提交被拒（文案与「交易中」区分）
+        Product manual = createOnSaleProduct("手动冻结商品", 3);
+        productService.freeze(manual.getId());
+        BizException ex = assertThrows(BizException.class, () -> submit(b1, manual));
+        assertEquals("卖家已暂停接单，暂不接收新意向", ex.getMessage());
+    }
+
+    /**
+     * 用例 21（W-4 端到端，MockMvc）：首笔提交即自动进交易；自动冻结期间第二笔仍可提交；
+     * 卖家「手动进入交易」端点已下线；商品详情暴露 {@code frozenBy} 供买家端区分文案。
+     */
+    @Test
+    void 提交即自动进交易且卖家手动端点已下线() throws Exception {
+        Product product = createOnSaleProduct("端到端商品", 3);
+        Buyer b1 = buyer("zhangsan", "13800000001");
+        Buyer b2 = buyer("lisi", "13800000002");
+        b1.setToken("e2e-token-1-" + System.nanoTime());
+        buyerRepository.save(b1);
+        b2.setToken("e2e-token-2-" + System.nanoTime());
+        buyerRepository.save(b2);
+
+        // 首笔：提交成功即自动进入交易
+        mockMvc.perform(post("/api/intents")
+                        .header("X-Token", b1.getToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"productId\":" + product.getId() + "}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.intent.status").value("in_transaction"));
+
+        // 自动冻结期间第二笔仍可提交，留在队列（C11）
+        mockMvc.perform(post("/api/intents")
+                        .header("X-Token", b2.getToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"productId\":" + product.getId() + "}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.intent.status").value("queued"));
+
+        // 卖家「手动进入交易」端点已下线（C11）
+        mockMvc.perform(post("/api/seller/products/" + product.getId() + "/deal")
+                        .header("X-Token", login()))
+                .andExpect(status().isNotFound());
+
+        // 商品详情带 frozenBy，买家端据此区分「交易中」与「卖家停售」
+        mockMvc.perform(get("/api/products/" + product.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.product.status").value("frozen"))
+                .andExpect(jsonPath("$.product.frozenBy").value("auto"));
+    }
+
+    /**
+     * 用例 22（W-4 并发）：10 个买家同时提交同一商品，只能推进<b>一笔</b>交易，其余全部正常排队、无一失败。
+     *
+     * <p>复现路径：JVM 锁 + 商品行 {@code FOR UPDATE} 当前读；若只有 JVM 锁而无行锁，
+     * 后到线程可能在前者事务提交前读到旧的 {@code ON_SALE}，推进出多条 {@code IN_TRANSACTION}。
+     */
+    @Test
+    void 并发提交只推进一笔交易且其余正常排队() throws Exception {
+        Product product = createOnSaleProduct("并发提交商品", 10);
+        int n = 10;
+        List<Buyer> buyers = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            buyers.add(buyer("concurrent" + i, "1380000" + (1000 + i)));
+        }
+
+        ExecutorService pool = Executors.newFixedThreadPool(n);
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(n);
+        AtomicInteger failed = new AtomicInteger();
+
+        for (Buyer b : buyers) {
+            pool.submit(() -> {
+                try {
+                    start.await();
+                    intentService.submit(b, product.getId());
+                } catch (Exception e) {
+                    failed.incrementAndGet();
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+        start.countDown();
+        assertTrue(done.await(30, TimeUnit.SECONDS), "并发提交超时");
+        pool.shutdown();
+
+        assertEquals(0, failed.get(), "自动冻结期间提交不应失败");
+        assertEquals(n, inTransactionCount(product.getId())
+                        + intentRepository.findByProductIdAndStatusOrderBySubmittedAtAscIdAsc(
+                                product.getId(), Intent.Status.QUEUED).size(),
+                "10 笔都应落库");
+        assertEquals(1, inTransactionCount(product.getId()), "同一时刻只能有一笔交易");
+        assertEquals("auto", productRepository.findById(product.getId()).orElseThrow().getFrozenBy());
     }
 
     private long inTransactionCount(Long productId) {

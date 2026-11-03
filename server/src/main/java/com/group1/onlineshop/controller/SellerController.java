@@ -89,18 +89,11 @@ public class SellerController {
     }
 
     /**
-     * 与队首进入交易：取队列首位置 IN_TRANSACTION，商品自动冻结（frozenBy='auto'）；队列为空 400「当前没有排队的买家」。
-     */
-    @PostMapping("/api/seller/products/{id}/deal")
-    public Map<String, Object> deal(HttpServletRequest request, @PathVariable long id) {
-        requireAuth(request);
-        return productService.deal(id);
-    }
-
-    /**
      * 标记交易结果：入参 {result:"success"|"fail"}。
-     * success → 胜出意向成功、队列剩余转失败、商品下架进历史；fail → 当前意向转失败（待处置），
-     * 队列有人自动递补、队列无人商品恢复在售。
+     * success → 胜出意向成功、库存扣 1；<b>有剩余则商品继续在售</b>（成交不下架，A.1.3-4），归零才售罄下架；
+     * fail → 当前意向转失败（待处置），队列有人自动递补、队列无人商品恢复在售。
+     *
+     * <p>「队首进入交易」不提供卖家端点（裁决 C11）——首笔由买家提交成功后自动触发，其后由系统自动推进。
      */
     @PostMapping("/api/seller/products/{id}/deal/result")
     public Map<String, Object> dealResult(HttpServletRequest request, @PathVariable long id,
