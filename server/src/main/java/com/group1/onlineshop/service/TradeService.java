@@ -2,9 +2,11 @@ package com.group1.onlineshop.service;
 
 import com.group1.onlineshop.entity.Intent;
 import com.group1.onlineshop.entity.Product;
+import com.group1.onlineshop.entity.StockLog;
 import com.group1.onlineshop.exception.BizException;
 import com.group1.onlineshop.repository.IntentRepository;
 import com.group1.onlineshop.repository.ProductRepository;
+import com.group1.onlineshop.repository.StockLogRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,6 +41,7 @@ public class TradeService {
 
     private final IntentRepository intentRepository;
     private final ProductRepository productRepository;
+    private final StockLogRepository stockLogRepository;
 
     /**
      * 进入交易的互斥锁表：key = 商品 id。见 {@link #dealLock(Long)} 的说明与压测依据（W-7）。
@@ -185,8 +188,21 @@ public class TradeService {
             deal.setDealtAt(LocalDateTime.now()); // A.2.2-2：交易时间写在意向自身，不取商品下架时间
             intentRepository.save(deal);
 
-            int left = (current.getStock() == null ? 0 : current.getStock()) - 1;
+            int before = current.getStock() == null ? 0 : current.getStock();
+            int left = before - 1;
             current.setStock(left);
+
+            // 库存流水（评审整改）：成交扣减与手动调库存一样必须留痕，否则 stock_log 累加对不上实际库存。
+            // 口径与 ProductService#updateStock 一致；operator 记 SYSTEM（系统自动扣减，非卖家手工操作）。
+            // 发布时的初始库存不写流水，故恒等式为「发布初始库存 + ΣchangeAmount = 当前库存」。
+            StockLog stockLog = new StockLog();
+            stockLog.setProductId(current.getId());
+            stockLog.setOperator("SYSTEM");
+            stockLog.setBeforeStock(before);
+            stockLog.setAfterStock(left);
+            stockLog.setChangeAmount(-1);
+            stockLog.setReason("成交扣减");
+            stockLogRepository.save(stockLog);
 
             if (left > 0) {
                 // T6a：成交不等于下架——商品回在售继续卖，队列不清空
