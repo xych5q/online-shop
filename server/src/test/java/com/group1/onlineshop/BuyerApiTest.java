@@ -108,10 +108,15 @@ class BuyerApiTest {
         // 数据库：价格必须为 19.90（两位小数）
         Product saved = productRepository.findAll().get(0);
         assertEquals(0, new BigDecimal("19.90").compareTo(saved.getPrice()));
-        // 接口：/api/product 序列化出的价格为 19.90
+        // 接口（迭代一验收点，保留不动）：/api/product 序列化出的价格为 19.90
         mockMvc.perform(get("/api/product"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.product.price").value(19.9))
+                .andExpect(content().string(containsString("\"price\":19.90")));
+        // 接口（迭代二契约，追加）：商品列表序列化出的价格同样为 19.90
+        mockMvc.perform(get("/api/products").param("page", "1").param("size", "12"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].price").value(19.9))
                 .andExpect(content().string(containsString("\"price\":19.90")));
     }
 
@@ -147,7 +152,8 @@ class BuyerApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.intent.intentId").exists())
                 .andExpect(jsonPath("$.intent.productId").value(product.getId()))
-                .andExpect(jsonPath("$.intent.status").exists())
+                // 裁决 C11：首笔提交即自动进入交易，不是排队中
+                .andExpect(jsonPath("$.intent.status").value("in_transaction"))
                 .andExpect(jsonPath("$.intent.submittedAt").exists())
                 .andExpect(jsonPath("$.intent.code").doesNotExist())
                 .andExpect(jsonPath("$.intent.position").doesNotExist());
@@ -184,13 +190,14 @@ class BuyerApiTest {
                         + ",\"categoryId\":" + categoryId + ",\"stock\":5}"));
     }
 
-    /** 直接落库一个在售商品（买家侧用例的测试数据准备） */
+    /** 直接落库一个在售商品（买家侧用例的测试数据准备）。A.1.2-2：商品必须挂二级类别，夹具同步补齐。 */
     private Product createOnSaleProduct() {
         Product product = new Product();
         product.setName("测试商品");
         product.setDescription("测试描述");
         product.setPrice(new BigDecimal("99.90"));
         product.setStock(5);
+        product.setCategoryId(categoryId);
         product.setStatus(Product.Status.ON_SALE);
         return productRepository.save(product);
     }

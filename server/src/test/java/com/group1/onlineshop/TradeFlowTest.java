@@ -21,6 +21,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -163,9 +164,12 @@ class TradeFlowTest {
         assertNull(requeued.getCode());                     // 口令码整体废弃（C6）
     }
 
-    /** 用例 15（改写，A.1.3-4）：成交成功且仍有库存 → 商品<b>回在售继续卖</b>，队列不清空，队首自动进下一笔。 */
+    /**
+     * 用例 15（改写，A.1.3-4）：成交成功且仍有库存、队列中还有下一位 → 扣 1 件不下架，
+     * 下一位自动进入下一笔交易（商品因新交易处于 FROZEN，不是 ON_SALE）。
+     */
     @Test
-    void 成交成功且仍有库存时商品回在售且队列不清空() {
+    void 成交成功后队列不清空且下一位自动进交易() {
         Product product = createOnSaleProduct("测试商品", 2);
         Buyer b1 = buyer("zhangsan", "13800000001");
         Buyer b2 = buyer("lisi", "13800000002");
@@ -183,6 +187,28 @@ class TradeFlowTest {
         assertEquals(Product.Status.FROZEN, reloaded.getStatus()); // 已进入下一笔交易
         assertEquals(1, reloaded.getStock());                        // 扣 1 件，剩 1
         assertNull(reloaded.getClosedAt());                          // 未下架
+    }
+
+    /**
+     * 用例 15a（补，A.1.3-4）：队列为空且成交后仍有库存 → 商品回 ON_SALE 继续在售。
+     *
+     * <p>原用例 15 的第二位买家会自动进入下一笔交易，把商品状态覆盖成 FROZEN，
+     * 导致「队列空 + 库存有余 → 回在售」这条核心路径长期零覆盖。
+     */
+    @Test
+    void 队列为空且库存有余时成交后商品回在售() {
+        Product product = createOnSaleProduct("测试商品", 2);
+        Buyer b1 = buyer("zhangsan", "13800000001");
+        long id1 = submit(b1, product);
+        tradeService.markResult(product, "success");
+
+        assertEquals(Intent.Status.SUCCESS, intent(id1).getStatus());
+        Product reloaded = productRepository.findById(product.getId()).orElseThrow();
+        assertEquals(Product.Status.ON_SALE, reloaded.getStatus()); // 队列已空、库存有余 → 继续卖
+        assertEquals(1, reloaded.getStock());                        // 扣 1 件，剩 1
+        assertNull(reloaded.getFrozenBy());                          // 交易冻结痕迹清空
+        assertNull(reloaded.getFrozenAt());
+        assertNull(reloaded.getClosedAt());                          // 成交不等于下架
     }
 
     /** 用例 15b（W-5）：库存扣减归零 → 商品售罄下架，队列未成交意向置「售罄失效」。 */
@@ -253,27 +279,86 @@ class TradeFlowTest {
                 .andExpect(jsonPath("$.intent.status").value("in_transaction"));
     }
 
-    /** 用例 19（W-3 补充）：listMyIntents 给出买家历史三值展示，交易时间取自 Intent.dealtAt 而非商品下架时间。 */
+    /**
+     * 用例 19（改写，W-3 补充）：买家历史必须走真实接口 {@code GET /api/buyers/history}。
+     *
+     * <p>原用例调 {@code IntentService.listMyIntents}，该方法全仓无生产调用者（死代码），
+     * 真实接口由 {@code BuyerService#history} 承接；此前的「通过」不能证明线上正确。
+     */
     @Test
-    void 我的历史返回三值展示且交易时间取自意向自身() {
+    void 我的历史通过真实接口返回三值展示() throws Exception {
         Buyer b = buyer("zhangsan", "13800000001");
+        b.setToken("test-buyer-token-" + System.nanoTime());
+        buyerRepository.save(b);
         Product product = createOnSaleProduct("二手自行车", 2);
-        submit(b, product);
+        submit(b, product); // C11：首笔提交即进入交易，买家侧仍展示为「待交易」
 
-        Map<String, Object> waiting = intentService.listMyIntents(b.getId(), 1);
-        assertEquals(1L, waiting.get("total")); // Page.getTotalElements() 为 long
-        Map<String, Object> queued = ((List<Map<String, Object>>) waiting.get("items")).get(0);
+        Map<String, Object> waiting = history(b);
+        assertEquals(1, waiting.get("total"));
+        Map<String, Object> queued = item(waiting, 0);
         assertEquals("待交易", queued.get("result"));
         assertEquals("二手自行车", queued.get("productName"));
         assertNull(queued.get("dealTime")); // 未成交：无交易时间
 
         tradeService.markResult(product, "success");
 
-        Map<String, Object> done = intentService.listMyIntents(b.getId(), 1);
-        Map<String, Object> success = ((List<Map<String, Object>>) done.get("items")).get(0);
+        Map<String, Object> done = history(b);
+        Map<String, Object> success = item(done, 0);
         assertEquals("成功", success.get("result"));
         assertNotNull(success.get("dealTime")); // 来自 dealtAt
-        assertNull(productRepository.findById(product.getId()).orElseThrow().getClosedAt()); // 成交不下架，商品 closedAt 仍为 null
+        assertNull(productRepository.findById(product.getId()).orElseThrow().getClosedAt()); // 成交不下架
+    }
+
+    /**
+     * 用例 19b（补）：FAILED / SOLD_OUT / CANCELLED 三种终态在买家侧统一展示为「失败」。
+     * 原用例只覆盖「待交易」与「成功」，三种失败映射此前零覆盖。
+     */
+    @Test
+    void 我的历史把失败售罄取消统一展示为失败() throws Exception {
+        Buyer b = buyer("zhangsan", "13800000001");
+        b.setToken("test-buyer-token-" + System.nanoTime());
+        buyerRepository.save(b);
+        Product p1 = createOnSaleProduct("失败商品", 1);
+        Product p2 = createOnSaleProduct("售罄商品", 1);
+        Product p3 = createOnSaleProduct("取消商品", 1);
+
+        Intent failed = newIntent(b.getId(), p1.getId(), Intent.Status.FAILED, LocalDateTime.now().minusMinutes(3));
+        failed.setDealtAt(LocalDateTime.now().minusMinutes(3));
+        intentRepository.save(failed);
+        newIntent(b.getId(), p2.getId(), Intent.Status.SOLD_OUT, LocalDateTime.now().minusMinutes(2));
+        newIntent(b.getId(), p3.getId(), Intent.Status.CANCELLED, LocalDateTime.now().minusMinutes(1));
+
+        Map<String, Object> body = history(b);
+        assertEquals(3, body.get("total"));
+        assertEquals("失败", item(body, 0).get("result")); // CANCELLED 最新提交
+        assertEquals("失败", item(body, 1).get("result")); // SOLD_OUT
+        assertEquals("失败", item(body, 2).get("result")); // FAILED
+    }
+
+    /** 调真实买家历史接口并解析为 Map；不直接调 service，避免再次测到无调用者的方法 */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> history(Buyer b) throws Exception {
+        MvcResult r = mockMvc.perform(get("/api/buyers/history").header("X-Token", b.getToken()))
+                .andExpect(status().isOk())
+                .andReturn();
+        return objectMapper.readValue(r.getResponse().getContentAsString(StandardCharsets.UTF_8), Map.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> item(Map<String, Object> body, int index) {
+        return ((List<Map<String, Object>>) body.get("items")).get(index);
+    }
+
+    /** 直接落库一条意向（提交时间显式指定，保证排序确定） */
+    private Intent newIntent(Long buyerId, Long productId, Intent.Status status, LocalDateTime submittedAt) {
+        Intent it = new Intent();
+        it.setBuyerId(buyerId);
+        it.setProductId(productId);
+        it.setName("测试买家");
+        it.setPhone("13800000000");
+        it.setStatus(status);
+        it.setSubmittedAt(submittedAt);
+        return intentRepository.save(it);
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.group1.onlineshop;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.group1.onlineshop.entity.Buyer;
 import com.group1.onlineshop.repository.BuyerRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,11 +12,10 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.not;
+import java.time.LocalDateTime;
+
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -64,9 +64,12 @@ class SellerCustomerApiTest {
     /** 用例 3：注册 3 个买家，列表按注册时间倒序（最后注册的排最前），字段齐全。 */
     @Test
     void 按注册时间倒序且字段齐全() throws Exception {
-        register("buyer001", "13800000001", "图书馆");
-        register("buyer002", "13800000002", "教学楼A");
-        register("buyer003", "13800000003", "食堂");
+        // 显式指定 createdAt 落库：真实注册的时间可能落在同一毫秒，
+        // 而 findAllByOrderByCreatedAtDesc 没有 id 次序兜底，固定顺序断言会偶发失败。
+        LocalDateTime base = LocalDateTime.now().minusHours(1);
+        newBuyer("buyer001", "13800000001", "图书馆", base);
+        newBuyer("buyer002", "13800000002", "教学楼A", base.plusMinutes(1));
+        newBuyer("buyer003", "13800000003", "食堂", base.plusMinutes(2));
 
         mockMvc.perform(get("/api/seller/customers").header("X-Token", login()))
                 .andExpect(status().isOk())
@@ -87,8 +90,19 @@ class SellerCustomerApiTest {
         register("buyer001", "13800000001", "图书馆");
         mockMvc.perform(get("/api/seller/customers").header("X-Token", login()))
                 .andExpect(status().isOk())
-                .andExpect(content().string(not(containsString("passwordHash"))))
-                .andExpect(content().string(not(containsString("token"))));
+                .andExpect(jsonPath("$.items[0].passwordHash").doesNotExist())
+                .andExpect(jsonPath("$.items[0].token").doesNotExist());
+    }
+
+    /** 直接落库买家并显式指定注册时间（仅用于排序用例，不参与登录） */
+    private void newBuyer(String username, String phone, String defaultLocation, LocalDateTime createdAt) {
+        Buyer buyer = new Buyer();
+        buyer.setUsername(username);
+        buyer.setPasswordHash("not-used-in-this-test");
+        buyer.setPhone(phone);
+        buyer.setDefaultLocation(defaultLocation);
+        buyer.setCreatedAt(createdAt);
+        buyerRepository.save(buyer);
     }
 
     /** 登录卖家账号（admin / seller123），返回 token */

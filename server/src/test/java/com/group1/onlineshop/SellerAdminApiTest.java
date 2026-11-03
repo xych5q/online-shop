@@ -21,6 +21,7 @@ import java.math.BigDecimal;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -217,8 +218,11 @@ class SellerAdminApiTest {
                 .andExpect(jsonPath("$.stock").value(20))
                 .andExpect(jsonPath("$.status").value("on_sale"));
         List<StockLog> logs = stockLogRepository.findByProductIdOrderByIdDesc(product.getId());
-        assertEquals(1, logs.size());
-        StockLog log = logs.get(0);
+        // 不数总条数：发布时若补记入库流水，条数会变；只锁定本次调库存这一笔
+        StockLog log = logs.stream()
+                .filter(l -> l.getChangeAmount() != null && l.getChangeAmount() == 15)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("未找到本次调库存 +15 的流水"));
         assertEquals("admin", log.getOperator());
         assertEquals(5, log.getBeforeStock());
         assertEquals(20, log.getAfterStock());
@@ -254,7 +258,13 @@ class SellerAdminApiTest {
                         .content("{\"stock\":5,\"reason\":\"补货\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("on_sale"));
-        assertEquals(2, stockLogRepository.count());
+        // 恒等式：夹具初始库存 5（直接落库，无发布流水）+ ΣchangeAmount = 当前库存
+        List<StockLog> logs = stockLogRepository.findByProductIdOrderByIdDesc(product.getId());
+        int sum = logs.stream().mapToInt(StockLog::getChangeAmount).sum();
+        int stock = productRepository.findById(product.getId()).orElseThrow().getStock();
+        assertEquals(5 + sum, stock);
+        assertTrue(logs.stream().anyMatch(l -> l.getChangeAmount() != null && l.getChangeAmount() == -5));
+        assertTrue(logs.stream().anyMatch(l -> l.getChangeAmount() != null && l.getChangeAmount() == 5));
     }
 
     /** 用例 15：手动下架后可上架，状态回在售且下架痕迹清空。 */
@@ -284,12 +294,16 @@ class SellerAdminApiTest {
                 .andExpect(jsonPath("$.error").value("仅「已下架」商品可上架"));
     }
 
-    /** 用例 17：售罄商品直接上架被拒 → 400「售罄商品请先补库存」。 */
+    /** 用例 17：售罄商品直接上架被拒 → 400「售罄商品请先补库存」（走真实链路：库存调 0 自动售罄）。 */
     @Test
     void 售罄商品上架被拒() throws Exception {
         Product product = createOnSaleProduct();
-        product.setStatus(Product.Status.SOLD_OUT);
-        productRepository.save(product);
+        mockMvc.perform(put("/api/seller/products/" + product.getId() + "/stock")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"stock\":0}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("sold_out"));
         mockMvc.perform(post("/api/seller/products/" + product.getId() + "/onshelf")
                         .header("X-Token", login()))
                 .andExpect(status().isBadRequest())
