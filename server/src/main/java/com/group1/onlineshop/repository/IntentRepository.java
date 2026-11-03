@@ -55,6 +55,9 @@ public interface IntentRepository extends JpaRepository<Intent, Long> {
     Page<Intent> findByBuyerIdAndStatusNotOrderBySubmittedAtDescIdDesc(
             Long buyerId, Intent.Status status, Pageable pageable);
 
+    /** 买家侧历史总数（排除指定状态，与上方分页查询口径一致） */
+    long countByBuyerIdAndStatusNot(Long buyerId, Intent.Status status);
+
     /**
      * 卖家侧「按商品看意向购买人」（A.2.3-4 两个维度之一）：
      * 某商品下的全部意向，按提交时间正序，含状态。

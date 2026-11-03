@@ -2,6 +2,7 @@ package com.group1.onlineshop.entity;
 
 import jakarta.persistence.*;
 import lombok.Data;
+import org.hibernate.annotations.UpdateTimestamp;
 import java.time.LocalDateTime;
 
 /**
@@ -37,4 +38,8 @@ public class Category {
 
     @Column(nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
+
+    /** 最后修改时间（重命名等操作时由 Hibernate 自动刷新） */
+    @UpdateTimestamp
+    private LocalDateTime updatedAt;
 }
