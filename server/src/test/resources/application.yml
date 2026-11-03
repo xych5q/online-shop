@@ -1,0 +1,42 @@
+# 测试专用配置：覆盖 src/main/resources/application.yml。
+#
+# 目的：仓库原有的测试直接继承主配置的 jdbc:h2:file:./data/onlineshop，
+# 而各测试类的 @BeforeEach 会 deleteAll() 清库，导致本地跑一次 mvn test
+# 就把开发库里的演示数据清空、并留下「测试分类」等造数（2026-11-03 实测）。
+# 本文件把测试库切到内存库，测试与开发数据彻底隔离。
+#
+# 注意：Spring Boot 会以本文件完整覆盖主配置，主配置中用到的键必须在此重复声明。
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:onlineshop-test;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    open-in-view: false
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 10MB
+  h2:
+    console:
+      enabled: false
+
+app:
+  seller:
+    username: admin
+    password: seller123
+  upload:
+    # 测试上传的图片写到 target 下，随 mvn clean 一起清除，不污染 data/uploads
+    dir: ./target/test-uploads
+  history:
+    page-size: 10
+
+logging:
+  level:
+    root: WARN
+    com.group1.onlineshop: WARN
