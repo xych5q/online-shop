@@ -40,13 +40,25 @@
   <div id="adminBody" style="display:none">
     <div class="tabs">
       <button class="active" data-tab="current">当前商品</button>
+      <button data-tab="categories">类别管理</button>
+      <button data-tab="customers">客户</button>
       <button data-tab="history">历史记录</button>
     </div>
 
     <div id="tab-current">
       <div class="card" id="currentProductCard"></div>
+      <div class="card" id="opsCard" style="display:none"></div>
       <div class="card" id="queueCard"></div>
       <div class="card" id="pendingCard" style="display:none"></div>
+    </div>
+
+    <div id="tab-categories" style="display:none">
+      <div class="card" id="categoryFormCard"></div>
+      <div class="card" id="categoryTreeCard"></div>
+    </div>
+
+    <div id="tab-customers" style="display:none">
+      <div class="card" id="customersCard"></div>
     </div>
 
     <div id="tab-history" style="display:none">
@@ -85,6 +97,16 @@
     <button class="close-x" data-close="histMask">×</button>
     <h3 id="histTitle">意向购买人</h3>
     <div id="histDetail"></div>
+  </div>
+</div>
+
+<!-- 通用只读明细弹窗（商品全部意向 / 客户意向流水） -->
+<div class="modal-mask" id="detailMask">
+  <div class="modal" style="max-width:720px">
+    <button class="close-x" data-close="detailMask">×</button>
+    <h3 id="detailTitle">明细</h3>
+    <div id="detailBody"></div>
+    <div class="pager" id="detailPager" style="display:none"></div>
   </div>
 </div>
 
