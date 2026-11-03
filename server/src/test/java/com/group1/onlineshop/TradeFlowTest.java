@@ -4,10 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.group1.onlineshop.entity.Buyer;
 import com.group1.onlineshop.entity.Intent;
 import com.group1.onlineshop.entity.Product;
+import com.group1.onlineshop.entity.StockLog;
 import com.group1.onlineshop.exception.BizException;
 import com.group1.onlineshop.repository.BuyerRepository;
 import com.group1.onlineshop.repository.IntentRepository;
 import com.group1.onlineshop.repository.ProductRepository;
+import com.group1.onlineshop.repository.StockLogRepository;
 import com.group1.onlineshop.service.IntentService;
 import com.group1.onlineshop.service.ProductService;
 import com.group1.onlineshop.service.TradeService;
@@ -78,6 +80,9 @@ class TradeFlowTest {
     private BuyerRepository buyerRepository;
 
     @Autowired
+    private StockLogRepository stockLogRepository;
+
+    @Autowired
     private MockMvc mockMvc;
 
     @Autowired
@@ -86,6 +91,7 @@ class TradeFlowTest {
     /** 每个用例前清空业务数据（H2 文件库跨测试持久化，必须清理；seller 账号由 DataInitializer 维护，不动） */
     @BeforeEach
     void cleanUp() {
+        stockLogRepository.deleteAll();
         intentRepository.deleteAll();
         productRepository.deleteAll();
         buyerRepository.deleteAll();
@@ -392,6 +398,43 @@ class TradeFlowTest {
                 "10 笔都应落库");
         assertEquals(1, inTransactionCount(product.getId()), "同一时刻只能有一笔交易");
         assertEquals("auto", productRepository.findById(product.getId()).orElseThrow().getFrozenBy());
+    }
+
+    /**
+     * 用例 23（评审整改：成交扣库存不写流水）：成交成功后 {@code stock_log} 多一条
+     * {@code changeAmount=-1} 的记录，连续两笔成交各一条，且流水累加与实际库存一致。
+     *
+     * <p>发布时的初始库存不写流水（见 ProductService#publish），因此恒等式是
+     * 「发布初始库存 + ΣchangeAmount = 当前库存」，而不是「ΣchangeAmount = 当前库存」。
+     */
+    @Test
+    void 成交扣减写库存流水且流水累加与当前库存一致() {
+        int initial = 3;
+        Product product = createOnSaleProduct("库存流水商品", initial);
+
+        submit(buyer("zhangsan", "13800000001"), product); // 首笔提交即自动进交易
+        tradeService.markResult(product, "success");        // 3 -> 2
+
+        List<StockLog> logs = stockLogRepository.findByProductIdOrderByIdDesc(product.getId());
+        assertEquals(1, logs.size());
+        StockLog first = logs.get(0);
+        assertEquals("SYSTEM", first.getOperator());
+        assertEquals(3, first.getBeforeStock());
+        assertEquals(2, first.getAfterStock());
+        assertEquals(-1, first.getChangeAmount());
+        assertEquals("成交扣减", first.getReason());
+
+        // 第二笔：商品回在售后继续卖，提交即自动进下一笔交易，再成交 2 -> 1
+        submit(buyer("lisi", "13800000002"), product);
+        tradeService.markResult(product, "success");
+
+        logs = stockLogRepository.findByProductIdOrderByIdDesc(product.getId());
+        assertEquals(2, logs.size());
+        int sum = logs.stream().mapToInt(StockLog::getChangeAmount).sum();
+        assertEquals(-2, sum);
+        Product now = productRepository.findById(product.getId()).orElseThrow();
+        assertEquals(1, now.getStock());
+        assertEquals(initial + sum, now.getStock(), "发布初始库存 + 流水累加 = 当前库存");
     }
 
     private long inTransactionCount(Long productId) {
