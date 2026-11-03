@@ -4,10 +4,12 @@ import com.group1.onlineshop.entity.Category;
 import com.group1.onlineshop.entity.Intent;
 import com.group1.onlineshop.entity.Product;
 import com.group1.onlineshop.entity.ProductImage;
+import com.group1.onlineshop.entity.StockLog;
 import com.group1.onlineshop.repository.CategoryRepository;
 import com.group1.onlineshop.repository.IntentRepository;
 import com.group1.onlineshop.repository.ProductImageRepository;
 import com.group1.onlineshop.repository.ProductRepository;
+import com.group1.onlineshop.repository.StockLogRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
@@ -30,7 +32,8 @@ import java.util.List;
  * <p><b>具体动作</b>：
  * <ol>
  *   <li>建立归档类别：一级「未分类」+ 其下二级「历史商品」</li>
- *   <li>商品：{@code stock} 为空补 1；{@code categoryId} 为空挂到「历史商品」；
+ *   <li>商品：{@code stock} 为空补 1，并补一条入库流水（{@code reason=迁移入库}，
+ *       使库存流水的累加值与当前库存一致）；{@code categoryId} 为空挂到「历史商品」；
  *       在售 / 已冻结的统一置为已下架（{@code offShelfReason=MANUAL}），不再参与交易</li>
  *   <li>把旧单图字段 {@code image} 迁移为一条 {@code ProductImage}（sortOrder=0，即主图）</li>
  *   <li>意向：全部置为 {@code ARCHIVED}，{@code buyerId} 保持 null</li>
@@ -48,10 +51,14 @@ public class MigrationRunner implements CommandLineRunner {
     private static final String ARCHIVE_ROOT_NAME = "未分类";
     private static final String ARCHIVE_CHILD_NAME = "历史商品";
 
+    /** 迁移补记入库流水的操作人标识，区别于卖家手动调整与成交流水的 SYSTEM */
+    private static final String MIGRATION_OPERATOR = "MIGRATION";
+
     private final ProductRepository productRepository;
     private final IntentRepository intentRepository;
     private final CategoryRepository categoryRepository;
     private final ProductImageRepository productImageRepository;
+    private final StockLogRepository stockLogRepository;
 
     @Override
     @Transactional
@@ -78,11 +85,25 @@ public class MigrationRunner implements CommandLineRunner {
 
         // 2) 商品回填 + 归档
         int archivedProducts = 0;
+        int backfilledStocks = 0;
         for (Product p : productRepository.findAll()) {
             boolean changed = false;
             if (p.getStock() == null) {
                 p.setStock(1);
                 changed = true;
+
+                // 同步补一条入库流水，使「ΣchangeAmount = 当前库存」对存量商品同样成立。
+                // 幂等依据：stock 回填为 1 后不再为 null，本分支不会二次进入，重启不会重复补记。
+                // 旧系统（口令码时代）无 stock 字段也无该表，故不存在需要累加的既有流水。
+                StockLog stockLog = new StockLog();
+                stockLog.setProductId(p.getId());
+                stockLog.setOperator(MIGRATION_OPERATOR);
+                stockLog.setBeforeStock(0);
+                stockLog.setAfterStock(1);
+                stockLog.setChangeAmount(1);
+                stockLog.setReason("迁移入库");
+                stockLogRepository.save(stockLog);
+                backfilledStocks++;
             }
             if (p.getCategoryId() == null) {
                 p.setCategoryId(archiveChild.getId());
@@ -120,8 +141,9 @@ public class MigrationRunner implements CommandLineRunner {
         }
         intentRepository.saveAll(legacyIntents);
 
-        log.info("[迁移] 完成：归档商品 {} 件、归档意向 {} 条；旧数据卖家后台可查，不进新队列、不可交易",
-                archivedProducts, legacyIntents.size());
+        log.info("[迁移] 完成：归档商品 {} 件、回填库存 {} 件（已补入库流水）、归档意向 {} 条；"
+                        + "旧数据卖家后台可查，不进新队列、不可交易",
+                archivedProducts, backfilledStocks, legacyIntents.size());
     }
 
     /** 确保「未分类 / 历史商品」两级类别存在，返回二级类别 */
