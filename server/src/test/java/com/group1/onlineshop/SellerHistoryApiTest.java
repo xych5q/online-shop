@@ -108,14 +108,16 @@ class SellerHistoryApiTest {
                 .andExpect(jsonPath("$.error").value("商品不存在"));
     }
 
-    /** 用例 5：3 个买家排队同一商品 → 按提交时间正序、position 1/2/3、买家信息齐全。 */
+    /** 用例 5：1 笔交易中 + 2 个排队买家 → 按提交时间正序、position 1/2/3、买家信息齐全。 */
     @Test
     void 按商品看排队位次与买家() throws Exception {
         Buyer b1 = newBuyer("buyer001");
         Buyer b2 = newBuyer("buyer002");
         Buyer b3 = newBuyer("buyer003");
         Product product = newProduct("排队商品");
-        newIntent(b1.getId(), product.getId(), Intent.Status.QUEUED, LocalDateTime.now().minusMinutes(9));
+        // C11 之后首笔提交即进入交易，真实队列不可能出现「三条全 QUEUED」；
+        // position 按提交时间正序从 1 起，交易中的那条仍是 position 1。
+        newIntent(b1.getId(), product.getId(), Intent.Status.IN_TRANSACTION, LocalDateTime.now().minusMinutes(9));
         newIntent(b2.getId(), product.getId(), Intent.Status.QUEUED, LocalDateTime.now().minusMinutes(6));
         newIntent(b3.getId(), product.getId(), Intent.Status.QUEUED, LocalDateTime.now().minusMinutes(3));
 
@@ -123,11 +125,12 @@ class SellerHistoryApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(3))
                 .andExpect(jsonPath("$.items[0].username").value("buyer001"))   // 正序
-                .andExpect(jsonPath("$.items[0].position").value(1))
+                .andExpect(jsonPath("$.items[0].status").value("in_transaction"))
+                .andExpect(jsonPath("$.items[0].position").isEmpty())            // 交易中不占排队位次
                 .andExpect(jsonPath("$.items[1].username").value("buyer002"))
-                .andExpect(jsonPath("$.items[1].position").value(2))
+                .andExpect(jsonPath("$.items[1].position").value(1))
                 .andExpect(jsonPath("$.items[2].username").value("buyer003"))
-                .andExpect(jsonPath("$.items[2].position").value(3))
+                .andExpect(jsonPath("$.items[2].position").value(2))
                 .andExpect(jsonPath("$.items[0].phone").value("13800000000"));
     }
 
