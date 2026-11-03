@@ -186,21 +186,6 @@ public class ProductService {
     }
 
     /**
-     * 与队首买家进入交易。
-     * 业务规则：仅「在售」商品可进入交易 → 否则 400「仅「在售」商品可进入交易」；
-     * 取队列首位（按提交时间正序，卖家不可挑人）置为 IN_TRANSACTION，商品自动置 FROZEN、frozenBy='auto'、frozenAt=now；
-     * 队列为空 → 400「当前没有排队的买家」。
-     */
-    public Map<String, Object> deal(long id) {
-        Product product = loadActiveProduct(id);
-        if (product.getStatus() != Product.Status.ON_SALE) {
-            throw new BizException("仅「在售」商品可进入交易");
-        }
-        tradeService.enterDeal(product);
-        return ok();
-    }
-
-    /**
      * 标记交易结果。
      * 业务规则：仅交易冻结中（FROZEN 且 frozenBy='auto'）可标记 → 否则 400「当前没有进行中的交易」；
      * result 只接受 success / fail，其他值 400「参数错误」。
@@ -291,6 +276,9 @@ public class ProductService {
         m.put("imageUrls", productImageRepository.findByProductIdOrderBySortOrderAscIdAsc(p.getId())
                 .stream().map(pi -> "/uploads/" + pi.getFilename()).toList());
         m.put("status", p.getStatus().name().toLowerCase());
+        // 裁决 C11：买家端要区分两类冻结文案——auto=交易中（仍可提交意向）、manual=卖家停售（不可提交），
+        // 故把 frozenBy 一并暴露；仅在冻结态有意义，其余状态为 null。
+        m.put("frozenBy", p.getStatus() == Product.Status.FROZEN ? p.getFrozenBy() : null);
         m.put("publishedAt", p.getCreatedAt());
         return m;
     }
