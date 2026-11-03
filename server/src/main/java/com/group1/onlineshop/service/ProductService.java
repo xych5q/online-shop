@@ -1,15 +1,19 @@
 package com.group1.onlineshop.service;
 
+import com.group1.onlineshop.dto.ProductCategoryUpdateRequest;
 import com.group1.onlineshop.dto.ProductPublishRequest;
+import com.group1.onlineshop.dto.ProductStockUpdateRequest;
 import com.group1.onlineshop.entity.Category;
 import com.group1.onlineshop.entity.Intent;
 import com.group1.onlineshop.entity.Product;
 import com.group1.onlineshop.entity.ProductImage;
+import com.group1.onlineshop.entity.StockLog;
 import com.group1.onlineshop.exception.BizException;
 import com.group1.onlineshop.repository.CategoryRepository;
 import com.group1.onlineshop.repository.IntentRepository;
 import com.group1.onlineshop.repository.ProductImageRepository;
 import com.group1.onlineshop.repository.ProductRepository;
+import com.group1.onlineshop.repository.StockLogRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -42,6 +46,7 @@ public class ProductService {
     private final IntentRepository intentRepository;
     private final CategoryRepository categoryRepository;
     private final ProductImageRepository productImageRepository;
+    private final StockLogRepository stockLogRepository;
     private final TradeService tradeService;
 
     /** 上传目录（application.yml: app.upload.dir = ./data/uploads） */
@@ -226,9 +231,116 @@ public class ProductService {
             intentRepository.save(it);
         }
         product.setStatus(Product.Status.OFF_SHELF);
+        product.setOffShelfReason("MANUAL");
         product.setClosedAt(LocalDateTime.now());
         productRepository.save(product);
         return ok();
+    }
+
+    /**
+     * 商品改挂类别（A.1.2-4）。
+     * 规则：商品不存在 404「商品不存在」；已下架 400「商品已下架」（历史只读，售罄商品允许改挂）；
+     * categoryId 缺失 400「商品类别必填」；类别不存在 400「类别不存在」；一级类别 400「商品必须挂到二级类别」。
+     */
+    public Map<String, Object> updateCategory(long id, ProductCategoryUpdateRequest req) {
+        Product product = loadActiveProduct(id);
+        Long categoryId = req.getCategoryId();
+
+        if (categoryId == null) {
+            throw new BizException("商品类别必填");
+        }
+        Category category = categoryRepository.findById(categoryId)
+                .orElseThrow(() -> new BizException("类别不存在"));
+        if (category.getParentId() == null) {
+            throw new BizException("商品必须挂到二级类别");
+        }
+
+        product.setCategoryId(categoryId);
+        productRepository.save(product);
+        return ok();
+    }
+
+    /**
+     * 手动调库存（A.1.3-5）。
+     * 规则：目标库存必填且 ≥0（400「库存不能为负数」）；已下架商品不可调（loadActiveProduct 拦截）；
+     * 每次调整写一条 stock_log 流水（操作人、调整前后、变动量、原因）；
+     * 状态联动（与交易服务 T6b / A.1.3-3 一致）：
+     *   - 在售且调到 0 → SOLD_OUT（offShelfReason='SOLD_OUT'、closedAt=now），队列未成交意向置 SOLD_OUT（补货不复活）；
+     *   - 售罄且调到 ≥1 → 回 ON_SALE 并清空下架痕迹（补货恢复在售）；
+     * 返回 {ok:true, id, stock, status, updatedAt}。
+     */
+    public Map<String, Object> updateStock(long id, ProductStockUpdateRequest req, String operator) {
+        Product product = loadActiveProduct(id);
+        Integer stock = req.getStock();
+
+        if (stock == null) {
+            throw new BizException("库存必填");
+        }
+        if (stock < 0) {
+            throw new BizException("库存不能为负数");
+        }
+
+        int before = product.getStock() == null ? 0 : product.getStock();
+        int after = stock;
+
+        // 状态联动：在售调零 → 售罄；售罄补货 → 回在售
+        if (after == 0 && product.getStatus() == Product.Status.ON_SALE) {
+            product.setStatus(Product.Status.SOLD_OUT);
+            product.setOffShelfReason("SOLD_OUT");
+            product.setClosedAt(LocalDateTime.now());
+            for (Intent it : intentRepository
+                    .findByProductIdAndStatusOrderBySubmittedAtAscIdAsc(product.getId(), Intent.Status.QUEUED)) {
+                it.setStatus(Intent.Status.SOLD_OUT);
+                it.setDisposed(true);
+                intentRepository.save(it);
+            }
+        } else if (after >= 1 && product.getStatus() == Product.Status.SOLD_OUT) {
+            product.setStatus(Product.Status.ON_SALE);
+            product.setOffShelfReason(null);
+            product.setClosedAt(null);
+        }
+
+        product.setStock(after);
+        productRepository.save(product);
+
+        // 库存调整流水（每次调整必记一条）
+        StockLog log = new StockLog();
+        log.setProductId(product.getId());
+        log.setOperator(operator == null ? "" : operator);
+        log.setBeforeStock(before);
+        log.setAfterStock(after);
+        log.setChangeAmount(after - before);
+        log.setReason(req.getReason() == null ? null : req.getReason().trim());
+        stockLogRepository.save(log);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", true);
+        result.put("id", product.getId());
+        result.put("stock", product.getStock());
+        result.put("status", product.getStatus().name().toLowerCase());
+        result.put("updatedAt", product.getUpdatedAt());
+        return result;
+    }
+
+    /**
+     * 上架。
+     * 规则：商品不存在 404「商品不存在」；仅手动下架（OFF_SHELF）可上架 → ON_SALE 并清空 closedAt/offShelfReason；
+     * 售罄商品 400「售罄商品请先补库存」（补库存 ≥1 会自动回在售）；其余状态 400「仅「已下架」商品可上架」。
+     */
+    public Map<String, Object> onshelf(long id) {
+        Product product = productRepository.findById(id)
+                .orElseThrow(() -> new BizException("商品不存在", 404));
+        if (product.getStatus() == Product.Status.OFF_SHELF) {
+            product.setStatus(Product.Status.ON_SALE);
+            product.setOffShelfReason(null);
+            product.setClosedAt(null);
+            productRepository.save(product);
+            return ok();
+        }
+        if (product.getStatus() == Product.Status.SOLD_OUT) {
+            throw new BizException("售罄商品请先补库存");
+        }
+        throw new BizException("仅「已下架」商品可上架");
     }
 
     /**

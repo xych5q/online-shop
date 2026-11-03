@@ -1,6 +1,9 @@
 package com.group1.onlineshop.controller;
 
+import com.group1.onlineshop.dto.ProductCategoryUpdateRequest;
 import com.group1.onlineshop.dto.ProductPublishRequest;
+import com.group1.onlineshop.dto.ProductStockUpdateRequest;
+import com.group1.onlineshop.entity.Seller;
 import com.group1.onlineshop.service.ProductService;
 import com.group1.onlineshop.service.SellerService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -9,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -16,8 +20,8 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Map;
 
 /**
- * 卖家端控制器：12 个 /api/seller/ 接口。
- * 业务规则与入参出参以 docs/design/接口设计.md 为准，规则逐条翻译自可运行原型，未做改动。
+ * 卖家端控制器：15 个 /api/seller/ 接口（12 个迭代 1 接口 + 3 个后台管理接口）。
+ * 业务规则与入参出参以 docs/design/接口设计.md 与 docs/design/接口设计-卖家后台管理.md 为准。
  * 鉴权：除 login 外，均从请求头 X-Token（或 Authorization: Bearer）取 token，校验失败抛 401「未登录或登录已失效」。
  */
 @RestController
@@ -121,6 +125,40 @@ public class SellerController {
                                        @RequestBody Map<String, Object> body) {
         requireAuth(request);
         return productService.dispose(id, str(body.get("action")));
+    }
+
+    /**
+     * 商品改挂类别：入参 ProductCategoryUpdateRequest {categoryId}（A.1.2-4）。
+     * 规则：商品不存在 404「商品不存在」；已下架商品不可改挂 400「商品已下架」；
+     * 目标类别必须存在且为二级类别（服务层校验）。
+     */
+    @PutMapping("/api/seller/products/{id}/category")
+    public Map<String, Object> updateCategory(HttpServletRequest request, @PathVariable long id,
+                                              @Valid @RequestBody ProductCategoryUpdateRequest body) {
+        requireAuth(request);
+        return productService.updateCategory(id, body);
+    }
+
+    /**
+     * 手动调库存：入参 ProductStockUpdateRequest {stock, reason?}（A.1.3-5）。
+     * 规则：目标库存 ≥0（0 转售罄）；每次调整写 stock_log 流水（操作人记卖家用户名）；
+     * 售罄商品调回 ≥1 自动恢复在售。
+     */
+    @PutMapping("/api/seller/products/{id}/stock")
+    public Map<String, Object> updateStock(HttpServletRequest request, @PathVariable long id,
+                                           @Valid @RequestBody ProductStockUpdateRequest body) {
+        Seller seller = sellerService.requireAuth(token(request));
+        return productService.updateStock(id, body, seller.getUsername());
+    }
+
+    /**
+     * 上架：仅手动下架（OFF_SHELF）商品可上架，置 status=ON_SALE；
+     * 售罄商品需先补库存（A.1.3-5）；交易成功售出的商品不可上架。
+     */
+    @PostMapping("/api/seller/products/{id}/onshelf")
+    public Map<String, Object> onshelf(HttpServletRequest request, @PathVariable long id) {
+        requireAuth(request);
+        return productService.onshelf(id);
     }
 
     /**

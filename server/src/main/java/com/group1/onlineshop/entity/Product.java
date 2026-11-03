@@ -2,6 +2,7 @@ package com.group1.onlineshop.entity;
 
 import jakarta.persistence.*;
 import lombok.Data;
+import org.hibernate.annotations.UpdateTimestamp;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
@@ -97,6 +98,10 @@ public class Product {
 
     @Column(nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
+
+    /** 最后修改时间（改挂类别/调库存/上下架等操作时由 Hibernate 自动刷新） */
+    @UpdateTimestamp
+    private LocalDateTime updatedAt;
 
     private LocalDateTime frozenAt;
 
