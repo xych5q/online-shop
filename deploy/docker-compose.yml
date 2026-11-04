@@ -9,7 +9,7 @@
 
 services:
   online-shop:
-    image: online-shop:0.1
+    image: online-shop:0.2
     container_name: online-shop
     build:
       context: ..            # 构建上下文必须是仓库根目录
