@@ -21,6 +21,8 @@ import org.springframework.test.web.servlet.MvcResult;
 import java.math.BigDecimal;
 import java.util.List;
 
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -464,6 +466,92 @@ class SellerAdminApiTest {
         mockMvc.perform(get("/api/seller/categories").header("X-Token", login()))
                 .andExpect(status().isMethodNotAllowed())
                 .andExpect(jsonPath("$.error").value("请求方法不支持"));
+    }
+
+    /** 用例 26（评审断言）：失败意向处置标记——提交一笔失败交易后 disposed=false，作废处置后再查变 true。 */
+    @Test
+    void 失败意向处置标记翻转() throws Exception {
+        Product product = publishViaApi("失败商品", 5);
+        Intent intent = newIntent(product.getId(), Intent.Status.FAILED);
+
+        mockMvc.perform(get("/api/seller/products/" + product.getId() + "/intents").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].disposed").value(false));
+
+        mockMvc.perform(post("/api/seller/intents/" + intent.getId() + "/dispose")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"action\":\"void\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/seller/products/" + product.getId() + "/intents").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].disposed").value(true));
+    }
+
+    /** 用例 27（评审验收）：图片超 9 张被拒——400，文案含「9」。 */
+    @Test
+    void 图片超9张被拒() throws Exception {
+        mockMvc.perform(post("/api/seller/products")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"十图商品\",\"categoryId\":" + childId
+                                + ",\"description\":\"x\",\"price\":9.9,\"stock\":1,"
+                                + "\"images\":[\"data:image/png;base64,AAAA\",\"data:image/png;base64,AAAA\","
+                                + "\"data:image/png;base64,AAAA\",\"data:image/png;base64,AAAA\","
+                                + "\"data:image/png;base64,AAAA\",\"data:image/png;base64,AAAA\","
+                                + "\"data:image/png;base64,AAAA\",\"data:image/png;base64,AAAA\","
+                                + "\"data:image/png;base64,AAAA\",\"data:image/png;base64,AAAA\"]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value(containsString("9")));
+    }
+
+    /** 用例 28（评审验收）：富文本超 8000 字被拒。 */
+    @Test
+    void 富文本超8000字被拒() throws Exception {
+        String tooLong = "富".repeat(8001);
+        mockMvc.perform(post("/api/seller/products")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"长文商品\",\"categoryId\":" + childId
+                                + ",\"description\":\"x\",\"price\":9.9,\"stock\":1,"
+                                + "\"richDescription\":\"" + tooLong + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value(containsString("8000")));
+    }
+
+    /** 用例 29（评审验收）：frozenBy 三态——auto 冻结、manual 冻结、未冻结在列表里分别显示对应值。 */
+    @Test
+    void 冻结来源三态() throws Exception {
+        publishViaApi("未冻结商品", 1);
+        Product manual = publishViaApi("手动冻结商品", 1);
+        Product auto = publishViaApi("交易冻结商品", 1);
+        manual.setStatus(Product.Status.FROZEN);
+        manual.setFrozenBy("manual");
+        productRepository.save(manual);
+        auto.setStatus(Product.Status.FROZEN);
+        auto.setFrozenBy("auto");
+        productRepository.save(auto);
+
+        mockMvc.perform(get("/api/seller/products").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.items[0].frozenBy").value("auto"))     // 最新发布：交易冻结
+                .andExpect(jsonPath("$.items[1].frozenBy").value("manual"))   // 手动冻结
+                .andExpect(jsonPath("$.items[2].frozenBy").value(nullValue())); // 未冻结为 null
+    }
+
+    /** 用例 30（评审验收）：发布侧 script 清洗——description 带 <script>，存进去的内容不含 <script。 */
+    @Test
+    void 发布描述script被剥离() throws Exception {
+        mockMvc.perform(post("/api/seller/products")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"清洗描述商品\",\"categoryId\":" + childId
+                                + ",\"description\":\"<script>alert(1)</script>好物\",\"price\":9.9,\"stock\":1}"))
+                .andExpect(status().isOk());
+        Product saved = productRepository.findAll().get(0);
+        assertTrue(!saved.getDescription().contains("<script"));
     }
 
     // ---------- 辅助方法 ----------

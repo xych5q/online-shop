@@ -166,8 +166,10 @@ public class SellerService {
      * 商品列表（卖家后台管理主入口，评审整改一）。
      * 规则：需卖家鉴权；status 取值 all / on_sale / frozen / off_shelf / sold_out（默认 all），
      * 非法值 400「参数错误」；按创建时间倒序；page 从 1 起、每页 size 条（默认 10），越界取最后一页；
-     * 每项含 {id,name,status,stock,price,pendingCount,inTransaction,createdAt}——
+     * 每项含 {id,name,status,stock,price,categoryId,description,frozenBy,imageUrl,pendingCount,inTransaction,createdAt}，
+     * 出参另有 {ok,page,pageSize,totalPages,total}——
      * pendingCount 为该商品排队中意向数，inTransaction 为该商品是否存在进行中交易；
+     * frozenBy 仅在冻结态有值（auto 交易中 / manual 手动停售），其余为 null；
      * 售罄商品从 status=sold_out 筛进来管理（补货入口），历史接口保持「只收手动下架」语义不动。
      */
     public Map<String, Object> products(String token, String status, Integer page, Integer size) {
@@ -177,7 +179,9 @@ public class SellerService {
         long total = filter == null ? productRepository.count() : productRepository.countByStatus(filter);
         int totalPages = (int) Math.max(1, (total + pageSize - 1) / pageSize);
         int cur = Math.min(Math.max(1, page == null ? 1 : page), totalPages);
-        Pageable pageable = PageRequest.of(cur - 1, pageSize, Sort.by(Sort.Direction.DESC, "createdAt"));
+        // 双键排序（评审整改）：createdAt 倒序 + id 倒序兜底，同一秒创建的多件商品翻页不重不漏
+        Pageable pageable = PageRequest.of(cur - 1, pageSize,
+                Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "id")));
 
         List<Map<String, Object>> items = new ArrayList<>();
         Page<Product> pageData = filter == null
