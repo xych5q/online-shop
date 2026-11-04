@@ -123,10 +123,11 @@ function hasLeafCategory() {
 /**
  * 数据来源（接口见 docs/design/接口设计-卖家后台管理.md）：
  *   列表 GET /api/seller/products?status=all&page=1&size=10
- *        → { ok, page, totalPages, total, items:[{id,name,status,stock,price,pendingCount,inTransaction,createdAt}] }
- *   详情 = 列表项（名称 / 价格 / 库存 / 状态 / frozenBy）+ 该商品全部意向 GET .../{id}/intents
- *        不再请求买家侧 GET /api/products/{id}：CatalogService.detail 只放行在售与冻结，
- *        售罄 / 已下架必然 404，补图片和类别这条路本身走不通，图片统一占位图、类别显示「—」。
+ *        → { ok, page, totalPages, total, items:[{id,name,status,stock,price,pendingCount,
+ *            inTransaction,frozenBy,imageUrl,description,categoryId,createdAt}] }
+ *   详情 = 列表项（名称 / 价格 / 库存 / 状态 / 冻结类型 / 主图 / 描述 / 类别）+ 该商品全部意向 GET .../{id}/intents
+ *        不请求买家侧 GET /api/products/{id}：CatalogService.detail 只放行在售与冻结，
+ *        售罄 / 已下架必然 404，所需的展示字段列表接口已一并返回。
  *   待处理失败意向 = 该商品 intents 中 status=failed 且 disposed 不为 true 的（不依赖 overview）。
  */
 let productList = { page: 1, size: 10, status: 'all', items: [], total: 0, totalPages: 1 };
@@ -362,10 +363,9 @@ async function loadDetail() {
       status: row.status,
       // 冻结类型只认接口下发的 frozenBy，缺失时为 null（徽标降级为「已冻结」）
       frozenBy: row.frozenBy == null ? null : row.frozenBy,
-      // 列表接口暂不提供图片 / 描述 / 类别，统一占位图与「—」
-      imageUrl: null,
-      description: '',
-      categoryId: null,
+      imageUrl: row.imageUrl || null,
+      description: row.description || '',
+      categoryId: row.categoryId == null ? null : row.categoryId,
       publishedAt: row.createdAt,
     },
     queue,
@@ -565,8 +565,8 @@ function renderOps(data) {
   const p = data.detail.product;
   // 已下架商品：后端拒绝调库存 / 改类别，界面同步锁住
   const locked = p.status === 'off_shelf';
-  // 列表接口不返回 categoryId，所以「当前类别」显示「—」，下拉从「请选择」开始；
-  // 保存后重拉列表仍拿不到，这是接口字段决定的降级，不做推断
+  // 当前类别取自列表项 categoryId，保存后重拉列表即刷新；
+  // 老数据没挂类别时（categoryId 为 null）显示「—」，下拉从「请选择」开始
   const catKnown = p.categoryId != null;
   card.style.display = '';
   card.innerHTML = `
@@ -595,7 +595,7 @@ function renderOps(data) {
           ? '只能挂到二级类别；新增类别请到「类别管理」。'
           : (locked
             ? '已下架商品不可改类别，请先在「历史记录」中重新上架。'
-            : '列表接口暂不返回当前类别；重新选择一个二级类别并保存即可改挂。')}</div>
+            : '该商品尚未挂类别；选择一个二级类别并保存即可。')}</div>
       </div>
     </div>
     <div class="actions">
