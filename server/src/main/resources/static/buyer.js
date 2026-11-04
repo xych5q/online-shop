@@ -48,6 +48,9 @@ async function api(path, opts) {
 /* ---------- 列表状态（与页面 URL 同步） ---------- */
 const state = { keyword: '', categoryId: null, page: 1, pageSize: 12, totalPages: 0 };
 
+/* 列表请求序号：快速切类别 / 翻页时只认最后一次请求的结果，避免旧响应覆盖新结果 */
+let listSeq = 0;
+
 let categoryTree = [];
 let openMenuId = null;
 
@@ -172,6 +175,7 @@ async function loadCategories() {
 }
 
 async function loadList() {
+  const seq = ++listSeq;
   const q = new URLSearchParams();
   if (state.keyword) q.set('keyword', state.keyword);
   if (state.categoryId) q.set('categoryId', state.categoryId);
@@ -179,7 +183,14 @@ async function loadList() {
   q.set('pageSize', state.pageSize);
   try {
     const data = await api('/api/products?' + q.toString());
+    if (seq !== listSeq) return;    // 期间又发出了新请求，本次结果作废
     state.totalPages = data.totalPages || 0;
+    // 页码越界（链接里带了旧页码 / 筛选后总数变少）→ 回退到最后一页，不停在空页
+    if (state.totalPages > 0 && state.page > state.totalPages) {
+      state.page = state.totalPages;
+      syncUrl();
+      return loadList();
+    }
     /* 裁决 C11 的列表口径：后端 VISIBLE = ON_SALE + FROZEN，
        这里只剔除「卖家暂停接单」（FROZEN 且 frozenBy=manual）；
        交易中（FROZEN 且 frozenBy=auto）保留在列表，卡片标徽标、详情页可提交意向 */
@@ -294,6 +305,16 @@ function restoreFromUrl() {
 (async function initList() {
   state.keyword = (new URLSearchParams(location.search).get('keyword') || '').trim();
   $('#searchInput').value = state.keyword;
+  /* 卡片图片加载失败（文件缺失 / 服务端未映射上传目录）时降级为占位图，
+     不把浏览器的破图图标露给买家；error 事件不冒泡，用捕获阶段统一接 */
+  $('#productGrid').addEventListener('error', (e) => {
+    const img = e.target;
+    if (!img || img.tagName !== 'IMG') return;
+    const ph = document.createElement('span');
+    ph.className = 'pic-ph';
+    ph.textContent = '图片加载失败';
+    img.replaceWith(ph);
+  }, true);
   await loadCategories();
   restoreFromUrl();
   renderCatTabs();

@@ -64,11 +64,15 @@ const RICH_TAGS = {
   table: [], thead: [], tbody: [], tr: [], th: [], td: [],
   a: ['href', 'title', 'target'],
   img: ['src', 'alt', 'width', 'height'],
+  /* A.1.5-1 要求详情能内嵌图片和视频：放行 video/source 只是加白名单条目，
+     属性仍逐个校验（on* / style / srcdoc 一律不在白名单内，src 走 safeUrl） */
+  video: ['src', 'controls', 'poster', 'width', 'height'],
+  source: ['src', 'type'],
 };
 const RICH_DROP = new Set([
   'script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet',
   'form', 'input', 'button', 'textarea', 'select', 'option', 'optgroup', 'label',
-  'link', 'meta', 'base', 'svg', 'math', 'template', 'noscript', 'audio', 'video', 'source',
+  'link', 'meta', 'base', 'svg', 'math', 'template', 'noscript', 'audio',
 ]);
 
 /* 链接与图片地址：只放行 http/https/mailto、站内绝对路径与锚点；
@@ -98,7 +102,7 @@ function cleanRich(node) {
     const allowed = RICH_TAGS[tag];
     Array.prototype.slice.call(child.attributes).forEach((attr) => {
       const name = attr.name.toLowerCase();
-      const urlAttr = name === 'href' || name === 'src';
+      const urlAttr = name === 'href' || name === 'src' || name === 'poster';
       const ok = allowed.indexOf(name) > -1 && (!urlAttr || safeUrl(attr.value));
       if (!ok) child.removeAttribute(attr.name);
     });
@@ -159,6 +163,21 @@ function buyStateOf(p) {
   return { badge: '', btn: '立即购买（提交意向）', disabled: false, note: '' };
 }
 
+/* 图片加载失败（上传文件缺失 / 服务端未映射上传目录）时降级为占位图，
+   避免浏览器直接渲染破图图标；缩略图失败则隐藏该张，不影响其余几张切换 */
+function attachImgFallback(img) {
+  img.addEventListener('error', () => {
+    if (img.closest('.thumb')) {
+      img.style.visibility = 'hidden';
+      return;
+    }
+    const ph = document.createElement('span');
+    ph.className = 'pic-ph';
+    ph.textContent = '图片加载失败';
+    img.replaceWith(ph);
+  });
+}
+
 function renderDetail(p) {
   currentProduct = p;
   const area = $('#detailArea');
@@ -203,6 +222,8 @@ function renderDetail(p) {
   const rich = $('#rich');
   if (rich) rich.innerHTML = sanitizeRich(p.richDescription);
 
+  area.querySelectorAll('img').forEach(attachImgFallback);
+
   const thumbsBox = area.querySelector('.thumbs');
   if (thumbsBox) {
     thumbsBox.addEventListener('click', (e) => {
@@ -210,6 +231,9 @@ function renderDetail(p) {
       if (!btn) return;
       area.querySelectorAll('.thumb').forEach((b) => b.classList.toggle('active', b === btn));
       $('#mainPic').innerHTML = `<img src="${esc(btn.dataset.src)}" alt="${esc(p.name)}">`;
+      // 切换后是新节点，重新挂失败降级，否则这张图 404 时仍是破图图标
+      const shown = $('#mainPic img');
+      if (shown) attachImgFallback(shown);
     });
   }
 
