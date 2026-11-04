@@ -23,6 +23,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import java.math.BigDecimal;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -216,6 +217,27 @@ class CatalogApiTest {
                         .content("{\"username\":\"buyer001\",\"password\":\"pass1234\",\"phone\":\"13900000001\",\"phoneConfirm\":\"13900000001\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("用户名已被注册"));
+    }
+
+    /** 用例：裁决 C11——卖家手动停售（manual 冻结）不进列表，也不计入 total；交易中（auto）保留。 */
+    @Test
+    void 手动停售不进列表也不计总数() throws Exception {
+        newProduct("在售商品", null, "描述");
+        Product auto = newProduct("交易中商品", null, "描述");
+        auto.setStatus(Product.Status.FROZEN);
+        auto.setFrozenBy("auto");
+        productRepository.save(auto);
+        Product manual = newProduct("卖家停售商品", null, "描述");
+        manual.setStatus(Product.Status.FROZEN);
+        manual.setFrozenBy("manual");
+        productRepository.save(manual);
+
+        mockMvc.perform(get("/api/products"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.totalPages").value(1))
+                .andExpect(jsonPath("$.items.length()").value(2))
+                .andExpect(jsonPath("$.items[*].name", not(hasItem("卖家停售商品"))));
     }
 
     // ---------- 辅助方法 ----------

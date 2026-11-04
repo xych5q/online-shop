@@ -4,9 +4,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.group1.onlineshop.entity.Category;
 import com.group1.onlineshop.entity.Intent;
 import com.group1.onlineshop.entity.Product;
+import com.group1.onlineshop.entity.ProductImage;
 import com.group1.onlineshop.entity.StockLog;
 import com.group1.onlineshop.repository.CategoryRepository;
 import com.group1.onlineshop.repository.IntentRepository;
+import com.group1.onlineshop.repository.ProductImageRepository;
 import com.group1.onlineshop.repository.ProductRepository;
 import com.group1.onlineshop.repository.StockLogRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,6 +61,9 @@ class SellerAdminApiTest {
     @Autowired
     private StockLogRepository stockLogRepository;
 
+    @Autowired
+    private ProductImageRepository productImageRepository;
+
     /** 每个用例的固定夹具：一级「测试分类」 + 二级「测试子类」 */
     private Long rootId;
     private Long childId;
@@ -68,6 +73,7 @@ class SellerAdminApiTest {
     void cleanUp() {
         stockLogRepository.deleteAll();
         intentRepository.deleteAll();
+        productImageRepository.deleteAll();
         productRepository.deleteAll();
         categoryRepository.deleteAll();
         Category root = new Category();
@@ -377,6 +383,26 @@ class SellerAdminApiTest {
                 .andExpect(jsonPath("$.items[0].pendingCount").value(0))
                 .andExpect(jsonPath("$.items[0].inTransaction").value(false))
                 .andExpect(jsonPath("$.items[0].createdAt").isNotEmpty());
+    }
+
+    /** 用例 24：列表下发全部图片——images 按 sortOrder 升序，第一条与 imageUrl 一致（卖家详情卡多图展示的数据来源）。 */
+    @Test
+    void 商品列表下发全部图片() throws Exception {
+        Product product = publishViaApi("多图商品", 3);
+        for (int order = 2; order >= 1; order--) {   // 倒序落库，验证出参仍按 sortOrder 升序
+            ProductImage image = new ProductImage();
+            image.setProductId(product.getId());
+            image.setFilename("multi_" + order + ".png");
+            image.setSortOrder(order);
+            productImageRepository.save(image);
+        }
+
+        mockMvc.perform(get("/api/seller/products").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].images.length()").value(2))
+                .andExpect(jsonPath("$.items[0].images[0]").value("/uploads/multi_1.png"))
+                .andExpect(jsonPath("$.items[0].images[1]").value("/uploads/multi_2.png"))
+                .andExpect(jsonPath("$.items[0].imageUrl").value("/uploads/multi_1.png"));
     }
 
     /** 用例 20：status 筛选——售罄走真实路径（调库存到 0），四种取值各返回正确的子集。 */
