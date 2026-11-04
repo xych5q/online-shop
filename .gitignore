@@ -55,3 +55,6 @@ venv/
 # ===== 构建/部署产物 =====
 dist/
 data-smoke/
+
+# ===== 验证入口运行残留（verify-all.sh）=====
+server/data-verify/
