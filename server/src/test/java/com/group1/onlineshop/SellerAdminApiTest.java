@@ -2,6 +2,7 @@ package com.group1.onlineshop;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.group1.onlineshop.entity.Category;
+import com.group1.onlineshop.entity.Intent;
 import com.group1.onlineshop.entity.Product;
 import com.group1.onlineshop.entity.StockLog;
 import com.group1.onlineshop.repository.CategoryRepository;
@@ -354,6 +355,103 @@ class SellerAdminApiTest {
                 .andExpect(jsonPath("$.canPublish").value(true));
     }
 
+    // ---------- 商品列表（评审整改：卖家端列表零覆盖，补 5+1 条） ----------
+
+    /** 用例 19：列表全量与字段——两件商品，倒序（后发的在前），八个字段齐全。 */
+    @Test
+    void 商品列表全量与字段() throws Exception {
+        publishViaApi("列表商品A", 3);
+        publishViaApi("列表商品B", 5);
+        mockMvc.perform(get("/api/seller/products").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.items.length()").value(2))
+                .andExpect(jsonPath("$.items[0].name").value("列表商品B"))   // createdAt 倒序：后发在前
+                .andExpect(jsonPath("$.items[0].id").isNumber())
+                .andExpect(jsonPath("$.items[0].name").isNotEmpty())
+                .andExpect(jsonPath("$.items[0].status").value("on_sale"))
+                .andExpect(jsonPath("$.items[0].stock").value(5))
+                .andExpect(jsonPath("$.items[0].price").value(19.9))
+                .andExpect(jsonPath("$.items[0].pendingCount").value(0))
+                .andExpect(jsonPath("$.items[0].inTransaction").value(false))
+                .andExpect(jsonPath("$.items[0].createdAt").isNotEmpty());
+    }
+
+    /** 用例 20：status 筛选——售罄走真实路径（调库存到 0），四种取值各返回正确的子集。 */
+    @Test
+    void 商品列表状态筛选() throws Exception {
+        Product onSale = publishViaApi("在售商品", 3);
+        Product soldOut = publishViaApi("售罄商品", 5);
+        mockMvc.perform(put("/api/seller/products/" + soldOut.getId() + "/stock")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"stock\":0}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("sold_out"));
+
+        mockMvc.perform(get("/api/seller/products?status=sold_out").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(soldOut.getId()))
+                .andExpect(jsonPath("$.items[0].status").value("sold_out"));
+        mockMvc.perform(get("/api/seller/products?status=on_sale").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(onSale.getId()));
+        mockMvc.perform(get("/api/seller/products?status=all").header("X-Token", login()))
+                .andExpect(jsonPath("$.total").value(2));
+        mockMvc.perform(get("/api/seller/products").header("X-Token", login()))
+                .andExpect(jsonPath("$.total").value(2));
+    }
+
+    /** 用例 21：非法 status 返回 400「参数错误」。 */
+    @Test
+    void 商品列表非法状态被拒() throws Exception {
+        mockMvc.perform(get("/api/seller/products?status=abc").header("X-Token", login()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("参数错误"));
+    }
+
+    /** 用例 22：分页边界——size=2 分两页；page=0 归一第一页；size=500 压到 100。 */
+    @Test
+    void 商品列表分页边界() throws Exception {
+        publishViaApi("分页商品A", 1);
+        publishViaApi("分页商品B", 1);
+        publishViaApi("分页商品C", 1);
+        mockMvc.perform(get("/api/seller/products?size=2").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalPages").value(2))
+                .andExpect(jsonPath("$.items.length()").value(2));
+        mockMvc.perform(get("/api/seller/products?page=0&size=2").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.items.length()").value(2));
+        mockMvc.perform(get("/api/seller/products?size=500").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.pageSize").value(100));
+    }
+
+    /** 用例 23：未登录（无 X-Token）返回 401。 */
+    @Test
+    void 商品列表未登录被拒() throws Exception {
+        mockMvc.perform(get("/api/seller/products"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("未登录或登录已失效"));
+    }
+
+    /** 用例 24：计数语义——pendingCount 只算 QUEUED，inTransaction 反映进行中交易。 */
+    @Test
+    void 商品列表排队与交易计数() throws Exception {
+        Product product = publishViaApi("计数商品", 5);
+        newIntent(product.getId(), Intent.Status.IN_TRANSACTION);   // 一笔进行中交易
+        newIntent(product.getId(), Intent.Status.QUEUED);           // 一个排队买家
+        mockMvc.perform(get("/api/seller/products").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].pendingCount").value(1))
+                .andExpect(jsonPath("$.items[0].inTransaction").value(true));
+    }
+
     // ---------- 辅助方法 ----------
 
     /** 登录卖家账号（admin / seller123，DataInitializer 首次启动创建），返回 token */
@@ -386,6 +484,30 @@ class SellerAdminApiTest {
         initialLog.setReason("夹具入库");
         stockLogRepository.save(initialLog);
         return product;
+    }
+
+    /** 通过发布接口真实发布一件商品（含发布流水），返回落库商品 */
+    private Product publishViaApi(String name, int stock) throws Exception {
+        mockMvc.perform(post("/api/seller/products")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"" + name + "\",\"categoryId\":" + childId
+                                + ",\"description\":\"x\",\"price\":19.9,\"stock\":" + stock + "}"))
+                .andExpect(status().isOk());
+        return productRepository.findAll().stream()
+                .filter(p -> name.equals(p.getName()))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    /** 直接落库一条意向（计数语义夹具：QUEUED 计入 pendingCount，IN_TRANSACTION 计入 inTransaction） */
+    private Intent newIntent(Long productId, Intent.Status status) {
+        Intent intent = new Intent();
+        intent.setProductId(productId);
+        intent.setName("测试买家");
+        intent.setPhone("13800000000");
+        intent.setStatus(status);
+        return intentRepository.save(intent);
     }
 
     /** 在夹具一级类别下新建一个二级类别 */
