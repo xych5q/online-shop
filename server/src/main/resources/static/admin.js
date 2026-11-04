@@ -63,7 +63,7 @@ async function enterAdmin() {
   $('#adminBody').style.display = '';
   // 发布表单、改挂类别下拉都依赖类别树，先备好再渲染工作台
   await loadCategories();
-  loadOverview();
+  loadProducts(true);
 }
 
 function showLogin() {
@@ -119,9 +119,46 @@ function hasLeafCategory() {
   return categoryTree.some((c) => (c.children || []).length > 0);
 }
 
-/* ---------- 当前商品 ---------- */
-let overview = null;
-let lastOverviewJson = '';
+/* ---------- 当前商品：商品列表 + 详情 ---------- */
+/**
+ * 数据来源（接口见 docs/design/接口设计-卖家后台管理.md）：
+ *   列表 GET /api/seller/products?status=all&page=1&size=10
+ *        → { ok, page, totalPages, total, items:[{id,name,status,stock,price,pendingCount,inTransaction,createdAt}] }
+ *   详情 = 列表项（名称 / 价格 / 库存 / 状态 / frozenBy）+ 该商品全部意向 GET .../{id}/intents
+ *        不再请求买家侧 GET /api/products/{id}：CatalogService.detail 只放行在售与冻结，
+ *        售罄 / 已下架必然 404，补图片和类别这条路本身走不通，图片统一占位图、类别显示「—」。
+ *   待处理失败意向 = 该商品 intents 中 status=failed 且 disposed 不为 true 的（不依赖 overview）。
+ */
+let productList = { page: 1, size: 10, status: 'all', items: [], total: 0, totalPages: 1 };
+let selectedProductId = null;
+let selectedDetail = null;
+let publishOpen = false;
+let lastListJson = '';
+
+const STATUS_FILTERS = [
+  ['all', '全部'],
+  ['on_sale', '在售'],
+  ['frozen', '冻结 / 交易中'],
+  ['sold_out', '售罄'],
+  ['off_shelf', '已下架'],
+];
+
+/**
+ * 商品状态徽标（status 为小写下划线）。
+ * 冻结态只能由 frozenBy 区分：auto = 交易中，manual = 卖家暂停接单。
+ * 不能用 inTransaction 反推 —— 手动冻结时同样可能存在交易中的意向，两者不可互推。
+ * frozenBy 未下发时给中性「已冻结」，不臆断成其中一种。
+ */
+function productBadge(p) {
+  if (p.status === 'on_sale') return '<span class="badge on">在售</span>';
+  if (p.status === 'frozen') {
+    if (p.frozenBy === 'auto') return '<span class="badge deal">交易中</span>';
+    if (p.frozenBy === 'manual') return '<span class="badge frozen">已冻结（手动）</span>';
+    return '<span class="badge frozen">已冻结</span>';
+  }
+  if (p.status === 'sold_out') return '<span class="badge off">已售罄</span>';
+  return '<span class="badge off">已下架</span>';
+}
 
 /** 发布表单是否正在填写（有内容时避免自动刷新清空输入） */
 function publishFormDirty() {
@@ -132,13 +169,26 @@ function publishFormDirty() {
     || ($('#pCategory') && $('#pCategory').value) || ($('#pStock') && $('#pStock').value !== '1'));
 }
 
-async function loadOverview() {
+/* ---------- 商品列表 ---------- */
+async function loadProducts(force) {
   try {
-    overview = await api('/api/seller/overview');
-    const json = JSON.stringify(overview);
-    if (json === lastOverviewJson) return; // 数据无变化，不重渲染（保护表单输入）
-    lastOverviewJson = json;
-    renderOverview(overview);
+    const data = await api(`/api/seller/products?status=${productList.status}&page=${productList.page}&size=${productList.size}`);
+    productList.page = data.page || 1;
+    productList.totalPages = data.totalPages || 1;
+    productList.total = data.total || 0;
+    productList.items = data.items || [];
+
+    // 选中项不在本页了（被筛掉 / 页码越界 / 刚下架）→ 退回第一件
+    if (!productList.items.some((p) => p.id === selectedProductId)) {
+      selectedProductId = productList.items.length ? productList.items[0].id : null;
+    }
+
+    const json = JSON.stringify(productList.items) + '|' + selectedProductId + '|' + productList.page + '|' + productList.status;
+    if (json !== lastListJson || force) {
+      lastListJson = json;
+      renderProductList();
+    }
+    await loadDetail();
   } catch (e) {
     if (e.status === 401) {
       token = '';
@@ -150,62 +200,200 @@ async function loadOverview() {
   }
 }
 
-function renderOverview(data) {
-  const card = $('#currentProductCard');
-  const queueCard = $('#queueCard');
-  const pendingCard = $('#pendingCard');
+function renderProductList() {
+  const card = $('#productListCard');
+  if (!card) return;
+  const items = productList.items;
 
-  if (!data.detail) {
-    // 发布表单正在填写时，不要因轮询刷新而清空输入
-    if (publishFormDirty()) return;
-    const leafReady = hasLeafCategory();
-    card.innerHTML = `
-      <h2>发布新商品 <span class="muted">同一时刻仅可有一件在售</span></h2>
-      <div class="form" style="max-width:520px">
-        <div>
-          <label>商品名称<span class="req">*</span></label>
-          <input type="text" id="pName" maxlength="100" placeholder="不超过 100 字">
-        </div>
-        <div>
-          <label>商品类别<span class="req">*</span></label>
-          <select id="pCategory" ${leafReady ? '' : 'disabled'}>${leafOptionsHtml('')}</select>
-          <div class="hint">只能挂到二级类别${leafReady ? '' : '；当前还没有二级类别，请先到「类别管理」创建'}。</div>
-        </div>
-        <div>
-          <label>库存（件）<span class="req">*</span></label>
-          <input type="number" id="pStock" min="1" step="1" value="1">
-        </div>
-        <div>
-          <label>商品描述</label>
-          <textarea id="pDesc" maxlength="2000" placeholder="描述成色、交易方式等（选填）"></textarea>
-        </div>
-        <div>
-          <label>价格（元）<span class="req">*</span></label>
-          <input type="number" id="pPrice" min="0.01" step="0.01" placeholder="大于 0，保留两位小数">
-        </div>
-        <div>
-          <label>商品图片（选填，最多 1 张，JPG / PNG，≤ 5MB）</label>
-          <input type="file" id="pImage" accept="image/jpeg,image/png" style="padding:8px">
-          <div class="hint" id="imgHint">发布后商品名称/价格/描述不可修改，库存与类别可在下方卡片中调整。</div>
-        </div>
-        <div class="error" id="pError"></div>
-        <button class="btn btn-primary" id="pSubmit" ${leafReady ? '' : 'disabled'}>发布商品</button>
+  const rows = items.map((p) => `
+    <div class="pl-row${p.id === selectedProductId ? ' active' : ''}" data-pid="${p.id}">
+      <div class="pl-main">
+        <div class="pl-name">${esc(p.name)}</div>
+        <div class="pl-meta">库存 ${p.stock == null ? 0 : p.stock} 件 · 排队 ${p.pendingCount || 0} 人 · 发布于 ${fmtTime(p.createdAt)}</div>
       </div>
-    `;
-    $('#pSubmit').addEventListener('click', publishProduct);
-    queueCard.innerHTML = '<h2>意向购买人</h2><div class="empty" style="padding:18px">暂无在售商品</div>';
-    pendingCard.style.display = 'none';
-    renderOps(data);
+      <div class="pl-num"><div class="pl-price">￥${fmtPrice(p.price)}</div></div>
+      <div class="pl-state">${productBadge(p)}</div>
+    </div>`).join('');
+
+  card.innerHTML = `
+    <h2>商品列表 <span class="muted">共 ${productList.total} 件 · 按发布时间倒序</span>
+      <button class="btn btn-primary btn-sm" id="openPublish" style="margin-left:auto">＋ 发布新商品</button>
+    </h2>
+    <div class="pl-filter">
+      ${STATUS_FILTERS.map(([v, label]) =>
+        `<button data-status="${v}" class="${productList.status === v ? 'active' : ''}">${label}</button>`).join('')}
+    </div>
+    ${items.length
+      ? `<div class="pl-list">${rows}</div>`
+      : '<div class="empty" style="padding:18px">没有符合条件的商品</div>'}
+    <div class="pager">
+      <span>共 ${productList.total} 件 · 每页 ${productList.size} 条 · 第 ${productList.page} / ${productList.totalPages} 页</span>
+      <button class="btn btn-ghost btn-sm" id="plPrev" ${productList.page <= 1 ? 'disabled' : ''}>上一页</button>
+      <button class="btn btn-ghost btn-sm" id="plNext" ${productList.page >= productList.totalPages ? 'disabled' : ''}>下一页</button>
+    </div>
+  `;
+
+  $('#openPublish').addEventListener('click', openPublish);
+  card.querySelectorAll('[data-pid]').forEach((el) =>
+    el.addEventListener('click', () => selectProduct(Number(el.dataset.pid)))
+  );
+  card.querySelectorAll('[data-status]').forEach((b) =>
+    b.addEventListener('click', () => {
+      if (productList.status === b.dataset.status) return;
+      productList.status = b.dataset.status;
+      productList.page = 1;
+      lastListJson = '';
+      loadProducts(true);
+    })
+  );
+  $('#plPrev').addEventListener('click', () => {
+    productList.page = Math.max(1, productList.page - 1);
+    lastListJson = '';
+    loadProducts(true);
+  });
+  $('#plNext').addEventListener('click', () => {
+    productList.page = Math.min(productList.totalPages, productList.page + 1);
+    lastListJson = '';
+    loadProducts(true);
+  });
+}
+
+function selectProduct(id) {
+  if (id === selectedProductId) return;
+  selectedProductId = id;
+  renderProductList(); // 只重画选中态，不发请求
+  loadDetail();
+}
+
+/* ---------- 发布表单（多商品：随时可发布，不再依赖「无在售商品」） ---------- */
+function openPublish() {
+  publishOpen = true;
+  renderPublishForm();
+  const el = $('#pName');
+  if (el) el.focus();
+}
+
+function renderPublishForm() {
+  const card = $('#publishCard');
+  if (!card) return;
+  if (!publishOpen) {
+    card.style.display = 'none';
+    card.innerHTML = '';
+    return;
+  }
+  card.style.display = '';
+  const leafReady = hasLeafCategory();
+  card.innerHTML = `
+    <h2>发布新商品 <span class="muted">多件商品可同时发布，各自独立排队</span></h2>
+    <div class="form" style="max-width:520px">
+      <div>
+        <label>商品名称<span class="req">*</span></label>
+        <input type="text" id="pName" maxlength="100" placeholder="不超过 100 字">
+      </div>
+      <div>
+        <label>商品类别<span class="req">*</span></label>
+        <select id="pCategory" ${leafReady ? '' : 'disabled'}>${leafOptionsHtml('')}</select>
+        <div class="hint">只能挂到二级类别${leafReady ? '' : '；当前还没有二级类别，请先到「类别管理」创建'}。</div>
+      </div>
+      <div>
+        <label>库存（件）<span class="req">*</span></label>
+        <input type="number" id="pStock" min="1" step="1" value="1">
+      </div>
+      <div>
+        <label>商品描述</label>
+        <textarea id="pDesc" maxlength="2000" placeholder="描述成色、交易方式等（选填）"></textarea>
+      </div>
+      <div>
+        <label>价格（元）<span class="req">*</span></label>
+        <input type="number" id="pPrice" min="0.01" step="0.01" placeholder="大于 0，保留两位小数">
+      </div>
+      <div>
+        <label>商品图片（选填，最多 1 张，JPG / PNG，≤ 5MB）</label>
+        <input type="file" id="pImage" accept="image/jpeg,image/png" style="padding:8px">
+        <div class="hint" id="imgHint">发布后商品名称 / 价格 / 描述不可修改，库存与类别可在下方详情中调整。</div>
+      </div>
+      <div class="error" id="pError"></div>
+      <div class="actions">
+        <button class="btn btn-primary" id="pSubmit" ${leafReady ? '' : 'disabled'}>发布商品</button>
+        <button class="btn btn-ghost" id="publishCancel">取消</button>
+      </div>
+    </div>
+  `;
+  $('#pSubmit').addEventListener('click', publishProduct);
+  $('#publishCancel').addEventListener('click', () => {
+    publishOpen = false;
+    renderPublishForm();
+  });
+}
+
+/* ---------- 选中商品的详情 ---------- */
+async function loadDetail() {
+  if (selectedProductId == null) {
+    selectedDetail = null;
+    renderDetail();
+    return;
+  }
+  const id = selectedProductId;
+  const row = productList.items.find((p) => p.id === id);
+  if (!row) {
+    selectedDetail = null;
+    renderDetail();
     return;
   }
 
-  const d = data.detail;
+  let intents = [];
+  try {
+    const r = await api(`/api/seller/products/${id}/intents`);
+    intents = r.items || [];
+  } catch (e) { /* 详情其余部分照常展示 */ }
+
+  const queue = intents.filter((i) => i.status === 'queued');
+  const currentDeal = intents.find((i) => i.status === 'in_transaction') || null;
+  // 待处理 = 交易失败且未处置。disposed 由 .../{id}/intents 下发；
+  // 字段缺失（未 true）时按未处置展示，重复点由后端「该意向无需处理」拦下，不会写坏数据。
+  const pendingFailed = intents.filter((i) => i.status === 'failed' && i.disposed !== true);
+
+  selectedDetail = {
+    product: {
+      id: row.id,
+      name: row.name,
+      price: row.price,
+      stock: row.stock,
+      status: row.status,
+      // 冻结类型只认接口下发的 frozenBy，缺失时为 null（徽标降级为「已冻结」）
+      frozenBy: row.frozenBy == null ? null : row.frozenBy,
+      // 列表接口暂不提供图片 / 描述 / 类别，统一占位图与「—」
+      imageUrl: null,
+      description: '',
+      categoryId: null,
+      publishedAt: row.createdAt,
+    },
+    queue,
+    currentDeal,
+    pendingFailed,
+  };
+  renderDetail();
+}
+
+function renderDetail() {
+  const card = $('#currentProductCard');
+  const queueCard = $('#queueCard');
+  const pendingCard = $('#pendingCard');
+  const opsCard = $('#opsCard');
+
+  if (!selectedDetail) {
+    card.innerHTML = `<h2>商品详情</h2><div class="empty" style="padding:18px">${productList.items.length
+      ? '从上方列表选择一件商品查看详情'
+      : '还没有商品，点上方「＋ 发布新商品」发布第一件'}</div>`;
+    queueCard.innerHTML = '<h2>意向购买人</h2><div class="empty" style="padding:18px">暂无在售商品</div>';
+    pendingCard.style.display = 'none';
+    opsCard.style.display = 'none';
+    opsCard.innerHTML = '';
+    return;
+  }
+
+  const d = selectedDetail;
   const p = d.product;
-  const statusBadge = p.status === 'on_sale'
-    ? '<span class="badge on">在售</span>'
-    : p.frozenBy === 'manual'
-      ? '<span class="badge frozen">已冻结（手动）</span>'
-      : '<span class="badge deal">已冻结（交易中）</span>';
 
   const pic = p.imageUrl
     ? `<img src="${esc(p.imageUrl)}" alt="">`
@@ -215,8 +403,8 @@ function renderOverview(data) {
   if (d.currentDeal) {
     dealInfo = `
       <div class="deal-banner">
-        🤝 当前交易对象（队首）：${esc(d.currentDeal.name)} · ${esc(d.currentDeal.phone)}
-        <span class="muted">意向提交于 ${fmtTime(d.currentDeal.submittedAt)}</span>
+        🤝 当前交易对象（队首）：${esc(d.currentDeal.username || d.currentDeal.name || '—')} · ${esc(d.currentDeal.phone || '—')}
+        　<span class="muted">意向提交于 ${fmtTime(d.currentDeal.submittedAt)}</span>
       </div>
       <div class="actions">
         <button class="btn btn-primary" id="markSuccess">✅ 标记交易成功（扣 1 件，有剩继续卖）</button>
@@ -232,17 +420,32 @@ function renderOverview(data) {
       </div>
       <div class="hint" style="margin-top:10px;color:var(--text-2);font-size:12px">买家提交意向后，系统自动与队首进入交易，无需手动操作。</div>
     `;
-  } else if (p.frozenBy === 'manual') {
+  } else if (p.status === 'frozen' && p.frozenBy !== 'auto') {
+    // manual（卖家暂停接单），以及 frozenBy 未下发时的降级：都按手动冻结处理，
+    // 因为这个分支只在「没有交易中意向」时才会到达（有交易中意向走上面的 currentDeal 分支）
     dealInfo = `
       <div class="actions">
         <button class="btn btn-primary" id="unfreezeBtn">手动解冻（恢复在售）</button>
         <button class="btn btn-ghost" id="offshelfBtn">手动下架</button>
       </div>
     `;
+  } else if (p.status === 'sold_out') {
+    dealInfo = `
+      <div class="hint-banner">商品已售罄：仍留在本列表中，补货 ≥ 1 件即自动恢复在售（下方「库存与类别」可直接补货）。</div>
+    `;
+  } else if (p.status === 'off_shelf') {
+    dealInfo = `
+      <div class="actions">
+        <button class="btn btn-primary" id="onshelfBtn">重新上架</button>
+      </div>
+      <div class="hint" style="margin-top:10px;color:var(--text-2);font-size:12px">已下架商品进入历史记录，重新上架后回到在售列表。</div>
+    `;
   }
 
   card.innerHTML = `
-    <h2>当前商品 ${statusBadge}</h2>
+    <h2>商品详情 ${productBadge(p)}
+      <span class="muted" style="margin-left:auto;font-size:12px;font-weight:400">#${p.id}</span>
+    </h2>
     ${dealInfo}
     <div class="divider"></div>
     <div class="product">
@@ -250,8 +453,9 @@ function renderOverview(data) {
       <div class="info">
         <div class="name">${esc(p.name)}</div>
         <div class="price"><small>￥</small>${fmtPrice(p.price)}</div>
+        <div class="desc" style="font-size:13px;color:var(--text-2)">库存 ${p.stock == null ? 0 : p.stock} 件　类别：${p.categoryId ? esc(categoryLabel(p.categoryId)) : '—'}</div>
         ${p.description ? `<div class="desc">${esc(p.description)}</div>` : ''}
-        <div class="meta">发布时间：${fmtTime(p.publishedAt)}${p.frozenAt ? ' · 冻结时间：' + fmtTime(p.frozenAt) : ''}</div>
+        <div class="meta">发布时间：${fmtTime(p.publishedAt)}</div>
       </div>
     </div>
   `;
@@ -266,9 +470,13 @@ function renderOverview(data) {
     if (!confirm('确认手动下架？下架后商品进入历史，队列中意向全部转为失败，不可恢复。')) return;
     await act(`/api/seller/products/${p.id}/offshelf`, {}, '商品已下架');
   });
+  bind('#onshelfBtn', async () => {
+    if (!confirm('确认重新上架？上架后回到在售列表，可继续接受买家意向。')) return;
+    await act(`/api/seller/products/${p.id}/onshelf`, {}, '商品已重新上架');
+  });
   bind('#markSuccess', async () => {
-    if (!confirm('确认交易成功？商品将永久下架进入历史，队列剩余意向自动转为失败。此操作不可回退。')) return;
-    await act(`/api/seller/products/${p.id}/deal/result`, { result: 'success' }, '交易成功，商品已下架');
+    if (!confirm('确认交易成功？扣减 1 件库存，库存归零则转售罄并下架，队列剩余意向自动转为失败。')) return;
+    await act(`/api/seller/products/${p.id}/deal/result`, { result: 'success' }, '交易成功');
   });
   bind('#markFail', async () => {
     if (!confirm('确认交易失败？商品将自动恢复，下一位排队买家自动递补进入交易。')) return;
@@ -278,21 +486,21 @@ function renderOverview(data) {
   // 意向队列
   if (d.queue.length || d.currentDeal) {
     const rows = d.queue
-      .map((i) => `<tr>
-        <td>${i.position}</td><td>${esc(i.name)}</td><td>${esc(i.phone)}</td>
+      .map((i, idx) => `<tr>
+        <td>${i.position || idx + 1}</td><td>${esc(i.username || i.name || '—')}</td><td>${esc(i.phone || '—')}</td>
         <td>${fmtTime(i.submittedAt)}</td><td><span class="badge queued">排队中</span></td>
       </tr>`)
       .join('');
     const dealRow = d.currentDeal
       ? `<tr style="background:#fdf9f0">
-          <td>—</td><td>${esc(d.currentDeal.name)}</td><td>${esc(d.currentDeal.phone)}</td>
+          <td>—</td><td>${esc(d.currentDeal.username || d.currentDeal.name || '—')}</td><td>${esc(d.currentDeal.phone || '—')}</td>
           <td>${fmtTime(d.currentDeal.submittedAt)}</td><td><span class="badge deal">交易中</span></td>
         </tr>`
       : '';
     queueCard.innerHTML = `
       <h2>意向购买人 <span class="muted">按提交时间正序 · 先到先得 · 卖家不可自选交易对象</span></h2>
       <table class="table">
-        <thead><tr><th>位次</th><th>姓名</th><th>联系电话</th><th>意向提交时间</th><th>状态</th></tr></thead>
+        <thead><tr><th>位次</th><th>意向人</th><th>联系电话</th><th>意向提交时间</th><th>状态</th></tr></thead>
         <tbody>${dealRow}${rows}</tbody>
       </table>
     `;
@@ -300,19 +508,21 @@ function renderOverview(data) {
     queueCard.innerHTML = '<h2>意向购买人</h2><div class="empty" style="padding:18px">暂无买家提交意向</div>';
   }
 
-  // 待处理失败意向
+  // 待处理失败意向：该商品有 failed 且未 disposed 的意向就显示。
+  // 处置接口是幂等的（ProductService.dispose 对非 FAILED 或已处置直接抛「该意向无需处理」），
+  // 所以允许重复点，由后端拦，前端不做二次判定，避免漏掉其他商品的失败意向。
   if (d.pendingFailed.length) {
     pendingCard.style.display = '';
     pendingCard.innerHTML = `
-      <h2>待处理：交易失败的买家 <span class="muted">确认「作废」或「重新排队」（重新排队将排到队尾，口令码不变）</span></h2>
+      <h2>待处理：交易失败的买家 <span class="muted">确认「作废」或「重新排队」（重新排队将排到队尾）</span></h2>
       <table class="table">
-        <thead><tr><th>姓名</th><th>联系电话</th><th>原提交时间</th><th>操作</th></tr></thead>
+        <thead><tr><th>意向人</th><th>联系电话</th><th>原提交时间</th><th>操作</th></tr></thead>
         <tbody>
           ${d.pendingFailed.map((i) => `<tr>
-            <td>${esc(i.name)}</td><td>${esc(i.phone)}</td><td>${fmtTime(i.submittedAt)}</td>
+            <td>${esc(i.username || i.name || '—')}</td><td>${esc(i.phone || '—')}</td><td>${fmtTime(i.submittedAt)}</td>
             <td style="white-space:nowrap">
-              <button class="btn btn-outline btn-sm" data-requeue="${i.id}">重新排队</button>
-              <button class="btn btn-ghost btn-sm" data-void="${i.id}">作废</button>
+              <button class="btn btn-outline btn-sm" data-requeue="${i.id != null ? i.id : i.intentId}">重新排队</button>
+              <button class="btn btn-ghost btn-sm" data-void="${i.id != null ? i.id : i.intentId}">作废</button>
             </td>
           </tr>`).join('')}
         </tbody>
@@ -320,13 +530,13 @@ function renderOverview(data) {
     `;
     pendingCard.querySelectorAll('[data-requeue]').forEach((b) =>
       b.addEventListener('click', async () => {
-        if (!confirm('确认让该买家重新排队？其口令码继续有效，位次刷新到队尾。')) return;
+        if (!confirm('确认让该买家重新排队？重新提交时间，排到队尾。')) return;
         await act(`/api/seller/intents/${b.dataset.requeue}/dispose`, { action: 'requeue' }, '已重新排队');
       })
     );
     pendingCard.querySelectorAll('[data-void]').forEach((b) =>
       b.addEventListener('click', async () => {
-        if (!confirm('确认作废该意向？作废后其口令码失效。')) return;
+        if (!confirm('确认作废该意向？作废后买家需重新提交。')) return;
         await act(`/api/seller/intents/${b.dataset.void}/dispose`, { action: 'void' }, '意向已作废');
       })
     );
@@ -334,8 +544,8 @@ function renderOverview(data) {
     pendingCard.style.display = 'none';
   }
 
-  // 库存调整 / 改挂类别 / 全部意向（A.1.3-5、A.1.2-4）
-  renderOps(data);
+  // 库存 / 改挂类别 / 全部意向
+  renderOps({ detail: d });
 }
 
 /* ---------- 当前商品：库存 / 类别 / 全部意向 ---------- */
@@ -353,6 +563,11 @@ function renderOps(data) {
   if (card.contains(document.activeElement)) return;
 
   const p = data.detail.product;
+  // 已下架商品：后端拒绝调库存 / 改类别，界面同步锁住
+  const locked = p.status === 'off_shelf';
+  // 列表接口不返回 categoryId，所以「当前类别」显示「—」，下拉从「请选择」开始；
+  // 保存后重拉列表仍拿不到，这是接口字段决定的降级，不做推断
+  const catKnown = p.categoryId != null;
   card.style.display = '';
   card.innerHTML = `
     <h2>库存与类别 <span class="muted">调整即时生效，可随时改回</span></h2>
@@ -360,20 +575,27 @@ function renderOps(data) {
       <div class="ops-field">
         <label>库存（当前 ${p.stock == null ? 0 : p.stock} 件）</label>
         <div class="ops-line">
-          <input type="number" id="stockInput" min="0" step="1" value="${p.stock == null ? 0 : p.stock}">
-          <button class="btn btn-outline btn-sm" id="stockSave">保存库存</button>
+          <input type="number" id="stockInput" min="0" step="1" value="${p.stock == null ? 0 : p.stock}" ${locked ? 'disabled' : ''}>
+          <button class="btn btn-outline btn-sm" id="stockSave" ${locked ? 'disabled' : ''}>保存库存</button>
         </div>
         <input type="text" id="stockReason" maxlength="200" placeholder="调整原因（选填，如：补货 / 盘点）"
+               ${locked ? 'disabled' : ''}
                style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:10px;font-size:13px;font-family:inherit;background:#fbfcfe;outline:none;color:var(--text)">
-        <div class="ops-hint">调到 0 → 商品转为「售罄」，仍留在当前商品卡片；补货 ≥ 1 自动恢复在售。</div>
+        <div class="ops-hint">${locked
+          ? '已下架商品不可调整库存，请先在「历史记录」中重新上架。'
+          : '调到 0 → 商品转为「售罄」，仍留在商品列表；补货 ≥ 1 自动恢复在售。'}</div>
       </div>
       <div class="ops-field">
-        <label>所属类别（当前 ${esc(categoryLabel(p.categoryId))}）</label>
+        <label>所属类别（当前 ${catKnown ? esc(categoryLabel(p.categoryId)) : '—'}）</label>
         <div class="ops-line">
-          <select id="catSelect">${leafOptionsHtml(p.categoryId)}</select>
-          <button class="btn btn-outline btn-sm" id="catSave">保存类别</button>
+          <select id="catSelect" ${locked ? 'disabled' : ''}>${leafOptionsHtml(catKnown ? p.categoryId : '')}</select>
+          <button class="btn btn-outline btn-sm" id="catSave" ${locked ? 'disabled' : ''}>保存类别</button>
         </div>
-        <div class="ops-hint">只能挂到二级类别；新增类别请到「类别管理」。</div>
+        <div class="ops-hint">${catKnown
+          ? '只能挂到二级类别；新增类别请到「类别管理」。'
+          : (locked
+            ? '已下架商品不可改类别，请先在「历史记录」中重新上架。'
+            : '列表接口暂不返回当前类别；重新选择一个二级类别并保存即可改挂。')}</div>
       </div>
     </div>
     <div class="actions">
@@ -403,8 +625,8 @@ async function saveStock(product) {
       body: reason ? { stock, reason } : { stock },
     });
     toast(`库存已更新为 ${data.stock} 件`, 'ok');
-    lastOverviewJson = '';
-    loadOverview();
+    lastListJson = '';
+    loadProducts(true);
   } catch (e) {
     toast(e.message, 'err');
   }
@@ -419,8 +641,8 @@ async function saveCategory(product) {
   try {
     await api(`/api/seller/products/${product.id}/category`, { method: 'PUT', body: { categoryId } });
     toast('类别已更新', 'ok');
-    lastOverviewJson = '';
-    loadOverview();
+    lastListJson = '';
+    loadProducts(true);
   } catch (e) {
     toast(e.message, 'err');
   }
@@ -484,7 +706,7 @@ async function act(path, body, okMsg) {
   try {
     await api(path, { method: 'POST', body });
     toast(okMsg, 'ok');
-    loadOverview();
+    loadProducts(true);
     if (path.includes('offshelf') || path.includes('result')) loadHistory();
   } catch (e) {
     toast(e.message, 'err');
@@ -493,7 +715,7 @@ async function act(path, body, okMsg) {
       localStorage.removeItem('seller_token');
       showLogin();
     } else {
-      loadOverview();
+      loadProducts(true);
     }
   }
 }
@@ -528,7 +750,8 @@ async function publishProduct() {
   }
   try {
     // 契约（ProductPublishRequest）：categoryId 必填二级类别、stock ≥1、images 为 base64 数组
-    await api('/api/seller/products', {
+    // 返回 {ok, id}，直接用 id 选中新商品，无需按第一行猜
+    const created = await api('/api/seller/products', {
       method: 'POST',
       body: {
         name,
@@ -540,8 +763,13 @@ async function publishProduct() {
       },
     });
     toast('商品已发布，进入在售', 'ok');
-    lastOverviewJson = '';
-    loadOverview();
+    publishOpen = false;
+    renderPublishForm();
+    productList.page = 1;
+    productList.status = 'all';
+    selectedProductId = created && created.id != null ? created.id : null;
+    lastListJson = '';
+    loadProducts(true);
   } catch (e) {
     err.textContent = e.message;
   }
@@ -654,9 +882,9 @@ async function onshelfProduct(id, name) {
   try {
     await api(`/api/seller/products/${id}/onshelf`, { method: 'POST', body: {} });
     toast('商品已重新上架', 'ok');
-    lastOverviewJson = '';
+    lastListJson = '';
     loadHistory();
-    loadOverview();
+    loadProducts(true);
   } catch (e) {
     toast(e.message, 'err');
   }
@@ -789,8 +1017,8 @@ async function createCategory() {
     toast(parentVal ? '二级类别已创建' : '一级类别已创建', 'ok');
     $('#catNewName').value = '';
     await loadCategoryTree();
-    lastOverviewJson = '';
-    loadOverview();
+    lastListJson = '';
+    loadProducts(true);
   } catch (e) {
     err.textContent = e.message;
   }
@@ -804,8 +1032,8 @@ async function renameCategory(id, name) {
     await api(`/api/seller/categories/${id}`, { method: 'PUT', body: { name: n } });
     toast('类别已改名', 'ok');
     await loadCategoryTree();
-    lastOverviewJson = '';
-    loadOverview();
+    lastListJson = '';
+    loadProducts(true);
   } catch (e) {
     toast(e.message, 'err');
   }
@@ -818,8 +1046,8 @@ async function deleteCategory(id, name) {
     await api(`/api/seller/categories/${id}`, { method: 'DELETE' });
     toast('类别已删除', 'ok');
     await loadCategoryTree();
-    lastOverviewJson = '';
-    loadOverview();
+    lastListJson = '';
+    loadProducts(true);
   } catch (e) {
     toast(e.message, 'err');
   }
@@ -962,6 +1190,7 @@ function switchTab(name) {
     const el = $('#tab-' + t);
     if (el) el.style.display = t === name ? '' : 'none';
   });
+  if (name === 'current') loadProducts(false);
   if (name === 'history') loadHistory();
   if (name === 'categories') loadCategoryTree();
   if (name === 'customers') loadCustomers();
@@ -995,6 +1224,6 @@ else showLogin();
 
 setInterval(() => {
   if (token && $('#adminBody').style.display !== 'none' && currentTab === 'current') {
-    loadOverview();
+    loadProducts(false);
   }
 }, 5000);
