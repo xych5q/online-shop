@@ -365,7 +365,7 @@ function renderOps(data) {
         </div>
         <input type="text" id="stockReason" maxlength="200" placeholder="调整原因（选填，如：补货 / 盘点）"
                style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:10px;font-size:13px;font-family:inherit;background:#fbfcfe;outline:none;color:var(--text)">
-        <div class="ops-hint">调到 0 → 商品转「售罄」并离开工作台；补货 ≥ 1 会自动恢复在售。</div>
+        <div class="ops-hint">调到 0 → 商品转为「售罄」，仍留在当前商品卡片；补货 ≥ 1 自动恢复在售。</div>
       </div>
       <div class="ops-field">
         <label>所属类别（当前 ${esc(categoryLabel(p.categoryId))}）</label>
@@ -393,7 +393,7 @@ async function saveStock(product) {
   if (!Number.isInteger(stock) || stock < 0) return toast('库存必须是 0 或正整数', 'err');
   if (stock === product.stock) return toast('库存未变化', '');
   if (stock === 0) {
-    const ok = confirm('库存调为 0 后商品将转为「售罄」并离开工作台，队列中的意向同时置为售罄。确认继续？');
+    const ok = confirm('库存调为 0 后商品将转为「售罄」并留在当前商品卡片（队列中的意向同时置为售罄），补货 ≥ 1 自动恢复在售。确认继续？');
     if (!ok) return;
   }
   const reason = ($('#stockReason') && $('#stockReason').value.trim()) || null;
