@@ -457,6 +457,27 @@ class SellerAdminApiTest {
                 .andExpect(jsonPath("$.items[0].inTransaction").value(true));
     }
 
+    /** 用例 25（评审断言）：失败意向处置标记——提交一笔失败交易后 disposed=false，作废处置后再查变 true。 */
+    @Test
+    void 失败意向处置标记翻转() throws Exception {
+        Product product = publishViaApi("失败商品", 5);
+        Intent intent = newIntent(product.getId(), Intent.Status.FAILED);
+
+        mockMvc.perform(get("/api/seller/products/" + product.getId() + "/intents").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].disposed").value(false));
+
+        mockMvc.perform(post("/api/seller/intents/" + intent.getId() + "/dispose")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"action\":\"void\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/seller/products/" + product.getId() + "/intents").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].disposed").value(true));
+    }
+
     // ---------- 辅助方法 ----------
 
     /** 登录卖家账号（admin / seller123，DataInitializer 首次启动创建），返回 token */
