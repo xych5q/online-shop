@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Map;
 
 /**
- * 卖家端控制器：18 个 /api/seller/ 接口（12 个迭代 1 接口 + 3 个后台管理接口 + 1 个客户列表 + 2 个购买历史两维度）。
+ * 卖家端控制器：19 个 /api/seller/ 接口（12 个迭代 1 接口 + 3 个后台管理接口 + 1 个客户列表 + 2 个购买历史两维度 + 1 个商品列表）。
  * 业务规则与入参出参以 docs/design/接口设计.md 与 docs/design/接口设计-卖家后台管理.md 为准。
  * 鉴权：除 login 外，均从请求头 X-Token（或 Authorization: Bearer）取 token，校验失败抛 401「未登录或登录已失效」。
  */
@@ -61,6 +61,20 @@ public class SellerController {
     }
 
     /**
+     * 商品列表（卖家后台管理主入口）：GET /api/seller/products?status=all&page=1&size=10。
+     * status 取 all/on_sale/frozen/off_shelf/sold_out；按创建时间倒序；page 从 1 起、每页默认 10 条；
+     * 每项含 {id,name,status,stock,price,pendingCount,inTransaction,createdAt}。
+     * 与 POST 同路径不同方法，不冲突。
+     */
+    @GetMapping("/api/seller/products")
+    public Map<String, Object> products(HttpServletRequest request,
+                                        @RequestParam(required = false) String status,
+                                        @RequestParam(required = false) Integer page,
+                                        @RequestParam(required = false) Integer size) {
+        return sellerService.products(token(request), status, page, size);
+    }
+
+    /**
      * 发布商品（多商品发布接口）：入参为 ProductPublishRequest DTO（@Valid 触发注解校验）。
      * 校验规则：类别必填（@NotNull categoryId，服务层再验存在且为二级类别）；库存 ≥1（@Min(1)，0/负数拦截）；
      * 图片可选、最多 9 张（@Size(max=9)）；richDescription 富文本 ≤8000 字；名称必填 ≤100 字；价格 >0。
@@ -70,8 +84,8 @@ public class SellerController {
     @PostMapping("/api/seller/products")
     public Map<String, Object> publish(HttpServletRequest request,
                                        @Valid @RequestBody ProductPublishRequest body) {
-        requireAuth(request);
-        return productService.publish(body);
+        Seller seller = sellerService.requireAuth(token(request));
+        return productService.publish(body, seller.getUsername());
     }
 
     /**

@@ -259,13 +259,38 @@ class SellerAdminApiTest {
                         .content("{\"stock\":5,\"reason\":\"补货\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("on_sale"));
-        // 恒等式：夹具初始库存 5（直接落库，无发布流水）+ ΣchangeAmount = 当前库存
+        // 恒等式（评审整改四）：ΣchangeAmount = 当前库存（夹具已补「夹具入库」初始流水）
         List<StockLog> logs = stockLogRepository.findByProductIdOrderByIdDesc(product.getId());
         int sum = logs.stream().mapToInt(StockLog::getChangeAmount).sum();
         int stock = productRepository.findById(product.getId()).orElseThrow().getStock();
-        assertEquals(5 + sum, stock);
+        assertEquals(sum, stock);
         assertTrue(logs.stream().anyMatch(l -> l.getChangeAmount() != null && l.getChangeAmount() == -5));
         assertTrue(logs.stream().anyMatch(l -> l.getChangeAmount() != null && l.getChangeAmount() == 5));
+    }
+
+    /** 用例 14b（评审整改四验收）：发布商品后立刻写 1 条「发布入库」流水，ΣchangeAmount = 当前库存。 */
+    @Test
+    void 发布商品写初始流水() throws Exception {
+        mockMvc.perform(post("/api/seller/products")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"发布流水商品\",\"categoryId\":" + childId
+                                + ",\"description\":\"x\",\"price\":29.9,\"stock\":7}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true));
+
+        Product product = productRepository.findAll().get(0);
+        List<StockLog> logs = stockLogRepository.findByProductIdOrderByIdDesc(product.getId());
+        assertEquals(1, logs.size());
+        StockLog log = logs.get(0);
+        assertEquals("admin", log.getOperator());
+        assertEquals(0, log.getBeforeStock());
+        assertEquals(7, log.getAfterStock());
+        assertEquals(7, log.getChangeAmount());
+        assertEquals("发布入库", log.getReason());
+        assertEquals(logs.stream().mapToInt(StockLog::getChangeAmount).sum(),
+                productRepository.findById(product.getId()).orElseThrow().getStock(),
+                "ΣchangeAmount = 当前库存");
     }
 
     /** 用例 15：手动下架后可上架，状态回在售且下架痕迹清空。 */
@@ -350,7 +375,17 @@ class SellerAdminApiTest {
         product.setStock(5);
         product.setCategoryId(childId);
         product.setStatus(Product.Status.ON_SALE);
-        return productRepository.save(product);
+        productRepository.save(product);
+        // 夹具初始流水（评审整改四）：口径 ΣchangeAmount 恒等于当前库存，直接落库的夹具也要补一笔
+        StockLog initialLog = new StockLog();
+        initialLog.setProductId(product.getId());
+        initialLog.setOperator("SYSTEM");
+        initialLog.setBeforeStock(0);
+        initialLog.setAfterStock(5);
+        initialLog.setChangeAmount(5);
+        initialLog.setReason("夹具入库");
+        stockLogRepository.save(initialLog);
+        return product;
     }
 
     /** 在夹具一级类别下新建一个二级类别 */

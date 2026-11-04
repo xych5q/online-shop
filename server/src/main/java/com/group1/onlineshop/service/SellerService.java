@@ -12,6 +12,7 @@ import com.group1.onlineshop.repository.ProductRepository;
 import com.group1.onlineshop.repository.SellerRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -155,9 +156,65 @@ public class SellerService {
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("detail", detail);
-        result.put("canPublish", detail == null
-                || product.getStatus() == Product.Status.SOLD_OUT);
+        // 多商品发布（A.1.1-1）：发布新品始终被允许，canPublish 恒为 true（评审整改三）
+        result.put("canPublish", true);
         return result;
+    }
+
+    /**
+     * 商品列表（卖家后台管理主入口，评审整改一）。
+     * 规则：需卖家鉴权；status 取值 all / on_sale / frozen / off_shelf / sold_out（默认 all），
+     * 非法值 400「参数错误」；按创建时间倒序；page 从 1 起、每页 size 条（默认 10），越界取最后一页；
+     * 每项含 {id,name,status,stock,price,pendingCount,inTransaction,createdAt}——
+     * pendingCount 为该商品排队中意向数，inTransaction 为该商品是否存在进行中交易；
+     * 售罄商品从 status=sold_out 筛进来管理（补货入口），历史接口保持「只收手动下架」语义不动。
+     */
+    public Map<String, Object> products(String token, String status, Integer page, Integer size) {
+        requireAuth(token);
+        Product.Status filter = parseStatus(status);
+        int pageSize = size == null || size < 1 ? historyPageSize : Math.min(size, 100);
+        long total = filter == null ? productRepository.count() : productRepository.countByStatus(filter);
+        int totalPages = (int) Math.max(1, (total + pageSize - 1) / pageSize);
+        int cur = Math.min(Math.max(1, page == null ? 1 : page), totalPages);
+        Pageable pageable = PageRequest.of(cur - 1, pageSize, Sort.by(Sort.Direction.DESC, "createdAt"));
+
+        List<Map<String, Object>> items = new ArrayList<>();
+        Page<Product> pageData = filter == null
+                ? productRepository.findAll(pageable)
+                : productRepository.findByStatus(filter, pageable);
+        for (Product p : pageData) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", p.getId());
+            m.put("name", p.getName());
+            m.put("status", p.getStatus().name().toLowerCase());
+            m.put("stock", p.getStock());
+            m.put("price", p.getPrice());
+            m.put("pendingCount", intentRepository.countByProductIdAndStatus(p.getId(), Intent.Status.QUEUED));
+            m.put("inTransaction", intentRepository
+                    .findByProductIdAndStatus(p.getId(), Intent.Status.IN_TRANSACTION).isPresent());
+            m.put("createdAt", p.getCreatedAt());
+            items.add(m);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", true);
+        result.put("page", cur);
+        result.put("totalPages", totalPages);
+        result.put("total", total);
+        result.put("items", items);
+        return result;
+    }
+
+    /** 状态筛选参数解析：all → null（不过滤）；非法值抛 400「参数错误」 */
+    private Product.Status parseStatus(String status) {
+        if (status == null || status.isBlank() || "all".equalsIgnoreCase(status.trim())) {
+            return null;
+        }
+        try {
+            return Product.Status.valueOf(status.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new BizException("参数错误");
+        }
     }
 
     /**
