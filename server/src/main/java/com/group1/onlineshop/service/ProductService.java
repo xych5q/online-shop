@@ -63,6 +63,10 @@ public class ProductService {
     /** 图片大小上限 5MB（与 multipart 配置一致） */
     private static final int MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
+    /** 富文本清洗：剥掉 <script> 标签及其内容（大小写不敏感，评审整改五） */
+    private static final Pattern SCRIPT_TAG = Pattern.compile(
+            "(?is)<script\\b[^>]*>.*?</script\\s*>|<script\\b[^>]*/?>");
+
     /**
      * 发布商品（多商品发布接口，对齐挑战需求 A 数据模型）。
      * 业务规则（需求迭代）：
@@ -76,17 +80,20 @@ public class ProductService {
      *   7. 图片沿用 data:image/(jpeg|png);base64 约定（单张 ≤5MB），解码落盘，
      *      文件名逐条写入 product_image 表（sortOrder 从 0 起，最小者为主图，与迁移脚本约定一致），
      *      并把主图文件名写入 Product.image 兼容旧展示字段；
+     *   8. 发布时写一条初始库存流水（评审整改四）：before=0、after=初始库存、changeAmount=初始库存、
+     *      reason=「发布入库」——口径统一为 ΣchangeAmount 恒等于当前库存；
      * 发布成功后商品状态直接为在售（无独立「上架」动作）；商品发布后不可修改（A.1.1-3）；
      * 成功返回 {ok:true, id}——id 为新商品 id（评审意见：避免前端发布后重拉列表）。
      *
      * DTO 注解校验失败时由 GlobalExceptionHandler 先行拦截（400 + 第一条错误文案），
      * 本方法内的校验为服务层二次防御（绕过 DTO 直接调用时同样生效）。
      */
-    public Map<String, Object> publish(ProductPublishRequest req) {
+    public Map<String, Object> publish(ProductPublishRequest req, String operator) {
         String name = req.getName() == null ? "" : req.getName().trim();
         Long categoryId = req.getCategoryId();
         String description = req.getDescription() == null ? "" : req.getDescription().trim();
-        String richDescription = req.getRichDescription() == null ? "" : req.getRichDescription().trim();
+        // 富文本入库前清洗（评审整改五）：<script> 标签及内容必须被剥掉
+        String richDescription = req.getRichDescription() == null ? "" : sanitizeRichText(req.getRichDescription()).trim();
         BigDecimal price = req.getPrice() == null ? null
                 : req.getPrice().setScale(2, RoundingMode.HALF_UP);
         Integer stock = req.getStock();
@@ -132,6 +139,16 @@ public class ProductService {
         product.setStock(stock);
         product.setStatus(Product.Status.ON_SALE);
         productRepository.save(product);
+
+        // 初始库存入库流水（评审整改四）：ΣchangeAmount 恒等于当前库存，从发布那一刻就成立
+        StockLog initialLog = new StockLog();
+        initialLog.setProductId(product.getId());
+        initialLog.setOperator(operator == null ? "" : operator);
+        initialLog.setBeforeStock(0);
+        initialLog.setAfterStock(product.getStock());
+        initialLog.setChangeAmount(product.getStock());
+        initialLog.setReason("发布入库");
+        stockLogRepository.save(initialLog);
 
         // 逐张保存图片并写入 product_image（sortOrder 从 0 开始，最小者即主图）；
         // 图片可整组省略（images 为空），此时不写图片记录、Product.image 保持空，前端显示占位图
@@ -440,6 +457,11 @@ public class ProductService {
             throw new BizException("服务器内部错误", 500);
         }
         return name;
+    }
+
+    /** 富文本清洗：剥掉 <script> 标签及其内容（评审整改五） */
+    private String sanitizeRichText(String html) {
+        return html == null ? "" : SCRIPT_TAG.matcher(html).replaceAll("");
     }
 
     /** 统一成功返回 {ok: true} */

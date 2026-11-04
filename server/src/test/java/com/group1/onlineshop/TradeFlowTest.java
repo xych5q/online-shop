@@ -501,25 +501,31 @@ class TradeFlowTest {
         tradeService.markResult(product, "success");        // 3 -> 2
 
         List<StockLog> logs = stockLogRepository.findByProductIdOrderByIdDesc(product.getId());
-        assertEquals(1, logs.size());
-        StockLog first = logs.get(0);
+        List<StockLog> dealLogs = logs.stream()
+                .filter(l -> "成交扣减".equals(l.getReason()))
+                .toList();
+        assertEquals(1, dealLogs.size());
+        StockLog first = dealLogs.get(0);
         assertEquals("SYSTEM", first.getOperator());
         assertEquals(3, first.getBeforeStock());
         assertEquals(2, first.getAfterStock());
         assertEquals(-1, first.getChangeAmount());
-        assertEquals("成交扣减", first.getReason());
 
         // 第二笔：商品回在售后继续卖，提交即自动进下一笔交易，再成交 2 -> 1
         submit(buyer("lisi", "13800000002"), product);
         tradeService.markResult(product, "success");
 
         logs = stockLogRepository.findByProductIdOrderByIdDesc(product.getId());
-        assertEquals(2, logs.size());
+        dealLogs = logs.stream()
+                .filter(l -> "成交扣减".equals(l.getReason()))
+                .toList();
+        assertEquals(2, dealLogs.size());
+        int dealSum = dealLogs.stream().mapToInt(StockLog::getChangeAmount).sum();
+        assertEquals(-2, dealSum);
         int sum = logs.stream().mapToInt(StockLog::getChangeAmount).sum();
-        assertEquals(-2, sum);
         Product now = productRepository.findById(product.getId()).orElseThrow();
         assertEquals(1, now.getStock());
-        assertEquals(initial + sum, now.getStock(), "发布初始库存 + 流水累加 = 当前库存");
+        assertEquals(sum, now.getStock(), "流水累加 = 当前库存");
     }
 
     private long inTransactionCount(Long productId) {
@@ -537,7 +543,17 @@ class TradeFlowTest {
         product.setPrice(new BigDecimal("99.90"));
         product.setStatus(Product.Status.ON_SALE);
         product.setStock(stock); // 迭代 2：发布时库存 ≥1，成交时扣减
-        return productRepository.save(product);
+        productRepository.save(product);
+        // 夹具初始流水（评审整改四）：口径 ΣchangeAmount 恒等于当前库存，直接落库的夹具也要补一笔
+        StockLog initialLog = new StockLog();
+        initialLog.setProductId(product.getId());
+        initialLog.setOperator("SYSTEM");
+        initialLog.setBeforeStock(0);
+        initialLog.setAfterStock(stock);
+        initialLog.setChangeAmount(stock);
+        initialLog.setReason("夹具入库");
+        stockLogRepository.save(initialLog);
+        return product;
     }
 
     private Buyer buyer(String username, String phone) {
