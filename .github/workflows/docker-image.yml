@@ -85,7 +85,7 @@ jobs:
             [ "$code" = "200" ] && break
             sleep 2
           done
-          BASE=http://localhost:8080 bash test-cases/api-smoke.sh
+          BASE=http://localhost:8080 bash test-cases/api-smoke-iter2.sh
 
       - name: 导出镜像 tar
         run: |

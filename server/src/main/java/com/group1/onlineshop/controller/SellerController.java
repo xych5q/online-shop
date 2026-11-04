@@ -1,12 +1,18 @@
 package com.group1.onlineshop.controller;
 
+import com.group1.onlineshop.dto.ProductCategoryUpdateRequest;
+import com.group1.onlineshop.dto.ProductPublishRequest;
+import com.group1.onlineshop.dto.ProductStockUpdateRequest;
+import com.group1.onlineshop.entity.Seller;
 import com.group1.onlineshop.service.ProductService;
 import com.group1.onlineshop.service.SellerService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -14,8 +20,8 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Map;
 
 /**
- * 卖家端控制器：12 个 /api/seller/ 接口。
- * 业务规则与入参出参以 docs/design/接口设计.md 为准，规则逐条翻译自可运行原型，未做改动。
+ * 卖家端控制器：19 个 /api/seller/ 接口（12 个迭代 1 接口 + 3 个后台管理接口 + 1 个客户列表 + 2 个购买历史两维度 + 1 个商品列表）。
+ * 业务规则与入参出参以 docs/design/接口设计.md 与 docs/design/接口设计-卖家后台管理.md 为准。
  * 鉴权：除 login 外，均从请求头 X-Token（或 Authorization: Bearer）取 token，校验失败抛 401「未登录或登录已失效」。
  */
 @RestController
@@ -55,14 +61,31 @@ public class SellerController {
     }
 
     /**
-     * 发布商品：入参 {name,description,price,image?}，image 为 data:image/(jpeg|png);base64,... 字符串。
-     * 规则：已有在售或交易中商品 400「已有商品在售或交易中，需先下架」；name 必填且 ≤100 字；description ≤2000 字；
-     * price >0 且保留两位小数；图片解码存 app.upload.dir，只把文件名存进 Product.image；发布后状态直接为在售。
+     * 商品列表（卖家后台管理主入口）：GET /api/seller/products?status=all&page=1&size=10。
+     * status 取 all/on_sale/frozen/off_shelf/sold_out；按创建时间倒序；page 从 1 起、每页默认 10 条；
+     * 每项含 {id,name,status,stock,price,pendingCount,inTransaction,createdAt}。
+     * 与 POST 同路径不同方法，不冲突。
+     */
+    @GetMapping("/api/seller/products")
+    public Map<String, Object> products(HttpServletRequest request,
+                                        @RequestParam(required = false) String status,
+                                        @RequestParam(required = false) Integer page,
+                                        @RequestParam(required = false) Integer size) {
+        return sellerService.products(token(request), status, page, size);
+    }
+
+    /**
+     * 发布商品（多商品发布接口）：入参为 ProductPublishRequest DTO（@Valid 触发注解校验）。
+     * 校验规则：类别必填（@NotNull categoryId，服务层再验存在且为二级类别）；库存 ≥1（@Min(1)，0/负数拦截）；
+     * 图片可选、最多 9 张（@Size(max=9)）；richDescription 富文本 ≤8000 字；名称必填 ≤100 字；价格 >0。
+     * 校验失败由全局异常处理器统一返回 400 + 第一条错误文案；
+     * 允许多商品并存（已取消「已有商品在售或交易中，需先下架」限制，A.1.1-1）。
      */
     @PostMapping("/api/seller/products")
-    public Map<String, Object> publish(HttpServletRequest request, @RequestBody Map<String, Object> body) {
-        requireAuth(request);
-        return productService.publish(body);
+    public Map<String, Object> publish(HttpServletRequest request,
+                                       @Valid @RequestBody ProductPublishRequest body) {
+        Seller seller = sellerService.requireAuth(token(request));
+        return productService.publish(body, seller.getUsername());
     }
 
     /**
@@ -84,18 +107,11 @@ public class SellerController {
     }
 
     /**
-     * 与队首进入交易：取队列首位置 IN_TRANSACTION，商品自动冻结（frozenBy='auto'）；队列为空 400「当前没有排队的买家」。
-     */
-    @PostMapping("/api/seller/products/{id}/deal")
-    public Map<String, Object> deal(HttpServletRequest request, @PathVariable long id) {
-        requireAuth(request);
-        return productService.deal(id);
-    }
-
-    /**
      * 标记交易结果：入参 {result:"success"|"fail"}。
-     * success → 胜出意向成功、队列剩余转失败、商品下架进历史；fail → 当前意向转失败（待处置），
-     * 队列有人自动递补、队列无人商品恢复在售。
+     * success → 胜出意向成功、库存扣 1；<b>有剩余则商品继续在售</b>（成交不下架，A.1.3-4），归零才售罄下架；
+     * fail → 当前意向转失败（待处置），队列有人自动递补、队列无人商品恢复在售。
+     *
+     * <p>「队首进入交易」不提供卖家端点（裁决 C11）——首笔由买家提交成功后自动触发，其后由系统自动推进。
      */
     @PostMapping("/api/seller/products/{id}/deal/result")
     public Map<String, Object> dealResult(HttpServletRequest request, @PathVariable long id,
@@ -126,6 +142,40 @@ public class SellerController {
     }
 
     /**
+     * 商品改挂类别：入参 ProductCategoryUpdateRequest {categoryId}（A.1.2-4）。
+     * 规则：商品不存在 404「商品不存在」；已下架商品不可改挂 400「商品已下架」；
+     * 目标类别必须存在且为二级类别（服务层校验）。
+     */
+    @PutMapping("/api/seller/products/{id}/category")
+    public Map<String, Object> updateCategory(HttpServletRequest request, @PathVariable long id,
+                                              @Valid @RequestBody ProductCategoryUpdateRequest body) {
+        requireAuth(request);
+        return productService.updateCategory(id, body);
+    }
+
+    /**
+     * 手动调库存：入参 ProductStockUpdateRequest {stock, reason?}（A.1.3-5）。
+     * 规则：目标库存 ≥0（0 转售罄）；每次调整写 stock_log 流水（操作人记卖家用户名）；
+     * 售罄商品调回 ≥1 自动恢复在售。
+     */
+    @PutMapping("/api/seller/products/{id}/stock")
+    public Map<String, Object> updateStock(HttpServletRequest request, @PathVariable long id,
+                                           @Valid @RequestBody ProductStockUpdateRequest body) {
+        Seller seller = sellerService.requireAuth(token(request));
+        return productService.updateStock(id, body, seller.getUsername());
+    }
+
+    /**
+     * 上架：仅手动下架（OFF_SHELF）商品可上架，置 status=ON_SALE；
+     * 售罄商品需先补库存（A.1.3-5）；交易成功售出的商品不可上架。
+     */
+    @PostMapping("/api/seller/products/{id}/onshelf")
+    public Map<String, Object> onshelf(HttpServletRequest request, @PathVariable long id) {
+        requireAuth(request);
+        return productService.onshelf(id);
+    }
+
+    /**
      * 历史商品列表（分页）：只查已下架商品，按 closedAt 倒序，每页 10 条，
      * 返回 {page,totalPages,total,items[]}；page 从 1 开始（?page=n）。
      */
@@ -141,6 +191,34 @@ public class SellerController {
     @GetMapping("/api/seller/history/{id}")
     public Map<String, Object> historyDetail(HttpServletRequest request, @PathVariable long id) {
         return sellerService.historyDetail(token(request), id);
+    }
+
+    /**
+     * 客户列表：返回全部已注册买家 {id,username,phone,defaultLocation,createdAt}，按注册时间倒序；
+     * 绝不返回 passwordHash 与登录 token（隐私）。
+     */
+    @GetMapping("/api/seller/customers")
+    public Map<String, Object> customers(HttpServletRequest request) {
+        return sellerService.customers(token(request));
+    }
+
+    /**
+     * 购买历史 · 按客户看：某买家的意向历史（排除归档），按提交时间倒序、每页 10 条（?page=n 从 1 起）；
+     * 客户不存在 404「客户不存在」；绝不包含口令码。
+     */
+    @GetMapping("/api/seller/customers/{id}/history")
+    public Map<String, Object> customerHistory(HttpServletRequest request, @PathVariable long id,
+                                               @RequestParam(required = false) Integer page) {
+        return sellerService.customerHistory(token(request), id, page);
+    }
+
+    /**
+     * 购买历史 · 按商品看意向购买人：某商品的全部意向（含已下架商品的历史意向），按提交时间正序；
+     * 排队中意向带 position（从 1 起）；商品不存在 404「商品不存在」；绝不包含口令码。
+     */
+    @GetMapping("/api/seller/products/{id}/intents")
+    public Map<String, Object> productIntents(HttpServletRequest request, @PathVariable long id) {
+        return sellerService.productIntents(token(request), id);
     }
 
     /** 鉴权：token 无效时由 SellerService 抛 401「未登录或登录已失效」 */

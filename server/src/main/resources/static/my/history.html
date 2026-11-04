@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>好物排队购 —— 我的历史</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="container">
+  <div class="topbar">
+    <div>
+      <h1>好物排队购</h1>
+      <div class="sub">在线购物 · 先到先得 · 线下当面交易</div>
+    </div>
+    <div class="topbar-links">
+      <span id="topbarUser" class="topbar-user"></span>
+      <a href="/admin.html" class="topbar-admin">卖家入口</a>
+    </div>
+  </div>
+
+  <!-- 我的历史（US-19）：GET /api/buyers/history，按提交时间倒序、每页 10 条、三值结果、只读 -->
+  <div class="card">
+    <a href="/" class="back-link">‹ 返回列表</a>
+    <div class="section-title">我的历史（只读）</div>
+    <div id="histBody"><div class="empty">加载中…</div></div>
+    <div class="pager" id="pager"></div>
+    <div class="list-note">按提交时间倒序，每页 10 条；交易结果只有三种值：待交易 / 成功 / 失败。列表不含价格与图片，无删除 / 修改入口，只显示本人账号名下的记录。</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/auth.js"></script>
+<script src="/my/history.js"></script>
+</body>
+</html>
