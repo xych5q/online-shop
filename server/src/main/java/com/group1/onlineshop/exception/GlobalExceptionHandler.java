@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -43,6 +44,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleUnreadable(HttpMessageNotReadableException e) {
         log.warn("请求体解析失败: {}", e.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", "请求参数格式错误"));
+    }
+
+    /** 路径存在但请求方法不支持：405 而非 500（如对只支持 POST/PUT/DELETE 的 /api/seller/categories 直接 GET） */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<Map<String, Object>> handleMethodNotSupported(HttpRequestMethodNotSupportedException e) {
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).body(Map.of("error", "请求方法不支持"));
     }
 
     /** 未预期异常：500（记录完整堆栈，避免静默吞掉） */
