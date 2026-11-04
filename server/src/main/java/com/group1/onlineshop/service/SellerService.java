@@ -199,6 +199,7 @@ public class SellerService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", true);
         result.put("page", cur);
+        result.put("pageSize", pageSize);
         result.put("totalPages", totalPages);
         result.put("total", total);
         result.put("items", items);
