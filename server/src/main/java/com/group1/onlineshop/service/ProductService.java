@@ -91,8 +91,8 @@ public class ProductService {
     public Map<String, Object> publish(ProductPublishRequest req, String operator) {
         String name = req.getName() == null ? "" : req.getName().trim();
         Long categoryId = req.getCategoryId();
-        String description = req.getDescription() == null ? "" : req.getDescription().trim();
-        // 富文本入库前清洗（评审整改五）：<script> 标签及内容必须被剥掉
+        String description = req.getDescription() == null ? "" : sanitizeRichText(req.getDescription()).trim();
+        // 富文本入库前清洗（评审整改五）：<script> 标签及内容必须被剥掉（description 与 richDescription 同样处理）
         String richDescription = req.getRichDescription() == null ? "" : sanitizeRichText(req.getRichDescription()).trim();
         BigDecimal price = req.getPrice() == null ? null
                 : req.getPrice().setScale(2, RoundingMode.HALF_UP);
