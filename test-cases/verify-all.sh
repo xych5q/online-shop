@@ -81,7 +81,7 @@ SRV_PID=$!
 srv_ready=0
 for _ in $(seq 1 60); do
   sleep 1
-  if curl -sf -o /dev/null "$BASE/api/product"; then srv_ready=1; break; fi
+  if curl -sf -o /dev/null "$BASE/api/products"; then srv_ready=1; break; fi
   kill -0 "$SRV_PID" 2>/dev/null || break
 done
 if [ "$srv_ready" -eq 1 ]; then
