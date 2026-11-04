@@ -457,6 +457,15 @@ class SellerAdminApiTest {
                 .andExpect(jsonPath("$.items[0].inTransaction").value(true));
     }
 
+    /** 用例 25：路径存在但方法不支持返回 405「请求方法不支持」，不再落 500 兜底。 */
+    @Test
+    void 方法不支持返回405() throws Exception {
+        // /api/seller/categories 只实现了 POST/PUT/DELETE，GET 落到全局异常
+        mockMvc.perform(get("/api/seller/categories").header("X-Token", login()))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.error").value("请求方法不支持"));
+    }
+
     // ---------- 辅助方法 ----------
 
     /** 登录卖家账号（admin / seller123，DataInitializer 首次启动创建），返回 token */
