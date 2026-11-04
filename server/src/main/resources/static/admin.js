@@ -12,6 +12,7 @@ function toast(msg, type) {
 function fmtTime(iso) {
   if (!iso) return '-';
   const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '-';
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
@@ -126,8 +127,9 @@ function hasLeafCategory() {
  *        → { ok, page, totalPages, total, items:[{id,name,status,stock,price,pendingCount,
  *            inTransaction,frozenBy,imageUrl,description,categoryId,createdAt}] }
  *   详情 = 列表项（名称 / 价格 / 库存 / 状态 / 冻结类型 / 主图 / 描述 / 类别）+ 该商品全部意向 GET .../{id}/intents
- *        不请求买家侧 GET /api/products/{id}：CatalogService.detail 只放行在售与冻结，
- *        售罄 / 已下架必然 404，所需的展示字段列表接口已一并返回。
+ *        图集另外解析：列表项带 images / imageUrls 就直接用；只带主图时，对在售 / 冻结商品
+ *        补一次公开详情 GET /api/products/{id}（只有它返回 images）——售罄 / 已下架必然 404，
+ *        退化为单张主图，见 resolveProductImages()。
  *   待处理失败意向 = 该商品 intents 中 status=failed 且 disposed 不为 true 的（不依赖 overview）。
  */
 let productList = { page: 1, size: 10, status: 'all', items: [], total: 0, totalPages: 1 };
@@ -135,6 +137,42 @@ let selectedProductId = null;
 let selectedDetail = null;
 let publishOpen = false;
 let lastListJson = '';
+// 详情数据的快照：轮询每 5 秒 loadDetail 一次，数据没变就不重绘，
+// 否则买家缩略图选中态会被打回第一张、图片也会闪一下
+let lastDetailJson = null;
+
+/**
+ * 详情图集（发表单支持 9 张，后台要能看到 9 张，否则等于只有主图）。
+ * 优先用列表项里下发的 images / imageUrls；老版本列表接口只给主图 imageUrl，
+ * 此时对买家可见的商品（在售 / 冻结）补一次公开详情 GET /api/products/{id} 拿 images，
+ * 售罄 / 已下架的公开详情必然 404，退化为只显示主图。
+ * 结果按商品 id 缓存：图片发布后不可改，避免 5 秒轮询反复请求。
+ */
+const imageCache = new Map();
+async function resolveProductImages(row) {
+  const own = Array.isArray(row.images) ? row.images
+    : Array.isArray(row.imageUrls) ? row.imageUrls : null;
+  if (own && own.length) return own.slice();
+  if (imageCache.has(row.id)) return imageCache.get(row.id);
+  let list = row.imageUrl ? [row.imageUrl] : [];
+  if (row.status === 'on_sale' || row.status === 'frozen') {
+    try {
+      const d = await api(`/api/products/${row.id}`);
+      const imgs = d && d.product && d.product.images;
+      if (Array.isArray(imgs) && imgs.length) list = imgs.slice();
+    } catch (e) {
+      // 拿不到图集不影响详情其余部分，保留主图
+    }
+  }
+  imageCache.set(row.id, list);
+  return list;
+}
+
+/** 上一次点开的缩略图下标：轮询重绘后接着显示同一张，不被打回第一张 */
+const picIndexById = new Map();
+
+/* 列表请求序号：5 秒轮询与手动翻页 / 切筛选可能并发，只认最后一次 */
+let listSeq = 0;
 
 const STATUS_FILTERS = [
   ['all', '全部'],
@@ -161,23 +199,23 @@ function productBadge(p) {
   return '<span class="badge off">已下架</span>';
 }
 
-/** 发布表单是否正在填写（有内容时避免自动刷新清空输入） */
-function publishFormDirty() {
-  const name = $('#pName');
-  if (!name) return false;
-  return !!(name.value.trim() || ($('#pDesc') && $('#pDesc').value.trim())
-    || ($('#pPrice') && $('#pPrice').value) || ($('#pImage') && $('#pImage').files.length)
-    || ($('#pCategory') && $('#pCategory').value) || ($('#pStock') && $('#pStock').value !== '1'));
-}
-
 /* ---------- 商品列表 ---------- */
 async function loadProducts(force) {
+  const seq = ++listSeq;
   try {
     const data = await api(`/api/seller/products?status=${productList.status}&page=${productList.page}&size=${productList.size}`);
+    if (seq !== listSeq) return;    // 期间又发出了新请求，本次结果作废
     productList.page = data.page || 1;
     productList.totalPages = data.totalPages || 1;
     productList.total = data.total || 0;
     productList.items = data.items || [];
+
+    // 页码越界（筛选后总数变少 / 本页商品被下架）→ 回到最后一页，不停在空页
+    if (productList.totalPages >= 1 && productList.page > productList.totalPages) {
+      productList.page = productList.totalPages;
+      lastListJson = '';
+      return loadProducts(force);
+    }
 
     // 选中项不在本页了（被筛掉 / 页码越界 / 刚下架）→ 退回第一件
     if (!productList.items.some((p) => p.id === selectedProductId)) {
@@ -309,10 +347,16 @@ function renderPublishForm() {
         <input type="number" id="pPrice" min="0.01" step="0.01" placeholder="大于 0，保留两位小数">
       </div>
       <div>
-        <label>商品图片（选填，最多 1 张，JPG / PNG，≤ 5MB）</label>
-        <input type="file" id="pImage" accept="image/jpeg,image/png" style="padding:8px">
-        <div class="hint" id="imgHint">发布后商品名称 / 价格 / 描述不可修改，库存与类别可在下方详情中调整。</div>
+        <label>商品图片（选填，最多 9 张，JPG / PNG，单张 ≤ 5MB，第一张为主图）</label>
+        <input type="file" id="pImage" accept="image/jpeg,image/png" multiple style="padding:8px">
+        <div class="hint">可一次多选；第一张作为列表与详情页主图，其余按选择顺序在买家详情页缩略图里展示。</div>
       </div>
+      <div>
+        <label>商品详情（富文本，选填，支持 HTML，≤ 8000 字）</label>
+        <textarea id="pRich" maxlength="8000" placeholder="可写 HTML，例如 &lt;b&gt;九成新&lt;/b&gt;、&lt;p&gt;无划痕&lt;/p&gt;、&lt;table&gt;参数表&lt;/table&gt;"></textarea>
+        <div class="hint">支持 p、b、img、ul、li、h1 至 h6、table 等标签，脚本与事件属性会被过滤；第一张图片请用上方商品图片上传。</div>
+      </div>
+      <div class="hint">发布后商品名称 / 价格 / 描述不可修改，库存与类别可在下方详情中调整。</div>
       <div class="error" id="pError"></div>
       <div class="actions">
         <button class="btn btn-primary" id="pSubmit" ${leafReady ? '' : 'disabled'}>发布商品</button>
@@ -325,28 +369,55 @@ function renderPublishForm() {
     publishOpen = false;
     renderPublishForm();
   });
+  // 选完图立刻给数量反馈，别等点「发布商品」才知道超了
+  const imgInput = $('#pImage');
+  if (imgInput) {
+    imgInput.addEventListener('change', () => {
+      const n = imgInput.files.length;
+      const box = $('#pError');
+      if (box) box.textContent = n > 9 ? `已选 ${n} 张，图片最多 9 张` : '';
+    });
+  }
 }
 
 /* ---------- 选中商品的详情 ---------- */
+/** 数据没变就不重绘：避免 5 秒轮询把详情卡整块重建（图片闪烁、缩略图选中态被重置） */
+function renderDetailIfChanged() {
+  const sig = JSON.stringify(selectedDetail);
+  if (sig === lastDetailJson) return;
+  lastDetailJson = sig;
+  renderDetail();
+}
+
 async function loadDetail() {
   if (selectedProductId == null) {
     selectedDetail = null;
-    renderDetail();
+    renderDetailIfChanged();
     return;
   }
   const id = selectedProductId;
   const row = productList.items.find((p) => p.id === id);
   if (!row) {
     selectedDetail = null;
-    renderDetail();
+    renderDetailIfChanged();
     return;
   }
 
   let intents = [];
+  let intentsError = false;
   try {
     const r = await api(`/api/seller/products/${id}/intents`);
     intents = r.items || [];
-  } catch (e) { /* 详情其余部分照常展示 */ }
+  } catch (e) {
+    // 已经切到别的商品时，别用这次失败覆盖新详情
+    if (id !== selectedProductId) return;
+    // 不能静默：否则请求失败会被渲染成「暂无买家提交意向」，卖家会误判没人排队
+    intentsError = true;
+  }
+  if (id !== selectedProductId) return;   // 等待期间用户已切换商品，丢弃旧结果
+
+  const images = await resolveProductImages(row);
+  if (id !== selectedProductId) return;
 
   const queue = intents.filter((i) => i.status === 'queued');
   const currentDeal = intents.find((i) => i.status === 'in_transaction') || null;
@@ -364,6 +435,7 @@ async function loadDetail() {
       // 冻结类型只认接口下发的 frozenBy，缺失时为 null（徽标降级为「已冻结」）
       frozenBy: row.frozenBy == null ? null : row.frozenBy,
       imageUrl: row.imageUrl || null,
+      images,
       description: row.description || '',
       categoryId: row.categoryId == null ? null : row.categoryId,
       publishedAt: row.createdAt,
@@ -371,8 +443,9 @@ async function loadDetail() {
     queue,
     currentDeal,
     pendingFailed,
+    intentsError,
   };
-  renderDetail();
+  renderDetailIfChanged();
 }
 
 function renderDetail() {
@@ -395,9 +468,20 @@ function renderDetail() {
   const d = selectedDetail;
   const p = d.product;
 
-  const pic = p.imageUrl
-    ? `<img src="${esc(p.imageUrl)}" alt="">`
+  // 图集：接口没给 images 时退化为单张主图；无图仍用占位图标
+  const pics = Array.isArray(p.images) && p.images.length
+    ? p.images
+    : (p.imageUrl ? [p.imageUrl] : []);
+  const pic = pics.length
+    ? `<img src="${esc(pics[0])}" alt="">`
     : `<svg width="70" height="70" viewBox="0 0 24 24" fill="none" stroke="#b8c1d4" stroke-width="1.4"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="M3.5 18l5-5 3.5 3.5L16 12l4.5 4.5"/></svg>`;
+  const thumbs = pics.length > 1
+    ? `<div class="thumbs">${pics.map((src, i) =>
+        `<button type="button" class="thumb${i === 0 ? ' active' : ''}" data-src="${esc(src)}" title="第 ${i + 1} 张 · 共 ${pics.length} 张"><img src="${esc(src)}" alt="第 ${i + 1} 张"><span class="thumb-no">${i + 1}</span></button>`).join('')}</div>`
+    : '';
+  const picTip = pics.length > 1
+    ? `<div class="pic-tip">共 ${pics.length} 张 · 第 1 张为主图</div>`
+    : '';
 
   let dealInfo = '';
   if (d.currentDeal) {
@@ -449,7 +533,11 @@ function renderDetail() {
     ${dealInfo}
     <div class="divider"></div>
     <div class="product">
-      <div class="pic">${pic}</div>
+      <div class="gallery">
+        <div class="pic">${pic}</div>
+        ${thumbs}
+        ${picTip}
+      </div>
       <div class="info">
         <div class="name">${esc(p.name)}</div>
         <div class="price"><small>￥</small>${fmtPrice(p.price)}</div>
@@ -459,6 +547,39 @@ function renderDetail() {
       </div>
     </div>
   `;
+
+  // 主图加载失败（文件缺失 / 服务端未映射上传目录）降级为文字，不显示浏览器破图图标；
+  // 缩略图加载失败只隐藏该张，其余仍可点
+  const gallery = card.querySelector('.gallery');
+  const picBox = gallery && gallery.querySelector('.pic');
+  const bindMainPicError = () => {
+    const img = picBox && picBox.querySelector('img');
+    if (!img) return;
+    img.addEventListener('error', () => {
+      picBox.innerHTML = '<span class="muted" style="font-size:12px">图片加载失败</span>';
+    });
+  };
+  bindMainPicError();
+
+  if (gallery && pics.length > 1) {
+    const thumbBtns = Array.from(gallery.querySelectorAll('.thumb'));
+    const showPic = (idx) => {
+      const btn = thumbBtns[idx];
+      if (!btn) return;
+      thumbBtns.forEach((b, i) => b.classList.toggle('active', i === idx));
+      picIndexById.set(p.id, idx);
+      picBox.innerHTML = `<img src="${esc(btn.dataset.src)}" alt="">`;
+      bindMainPicError();
+    };
+    thumbBtns.forEach((b, i) => {
+      const im = b.querySelector('img');
+      if (im) im.addEventListener('error', () => { b.style.visibility = 'hidden'; });
+      b.addEventListener('click', () => showPic(i));
+    });
+    // 5 秒轮询重绘后接着显示上次看的那张，不被打回第一张
+    const keep = picIndexById.get(p.id) || 0;
+    if (keep > 0) showPic(keep);
+  }
 
   const bind = (sel, fn) => { const el = $(sel); if (el) el.addEventListener('click', fn); };
   bind('#freezeBtn', async () => {
@@ -504,6 +625,8 @@ function renderDetail() {
         <tbody>${dealRow}${rows}</tbody>
       </table>
     `;
+  } else if (d.intentsError) {
+    queueCard.innerHTML = '<h2>意向购买人</h2><div class="empty" style="padding:18px;color:var(--danger)">意向加载失败，请刷新重试</div>';
   } else {
     queueCard.innerHTML = '<h2>意向购买人</h2><div class="empty" style="padding:18px">暂无买家提交意向</div>';
   }
@@ -560,7 +683,10 @@ function renderOps(data) {
     card.innerHTML = '';
     return;
   }
-  if (card.contains(document.activeElement)) return;
+  // 只保护「正在输入的控件」：若焦点停在「保存库存 / 保存类别」按钮上，保存后仍需重绘，
+  // 否则卡片会一直显示旧库存/旧类别，直到用户点别处触发下一次轮询
+  const ae = document.activeElement;
+  if (ae && card.contains(ae) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName)) return;
 
   const p = data.detail.product;
   // 已下架商品：后端拒绝调库存 / 改类别，界面同步锁住
@@ -721,7 +847,11 @@ async function act(path, body, okMsg) {
 }
 
 /* ---------- 发布商品 ---------- */
+// 提交流程锁：9 张图读 base64 + 请求可能要好几秒，期间按钮不禁用会被连点发出多件重复商品
+let publishing = false;
+
 async function publishProduct() {
+  if (publishing) return;
   const name = $('#pName').value.trim();
   const description = $('#pDesc').value.trim();
   const price = $('#pPrice').value;
@@ -736,19 +866,30 @@ async function publishProduct() {
   const priceNum = Number(price);
   if (!Number.isFinite(priceNum) || priceNum <= 0) return (err.textContent = '价格必须为大于 0 的数字');
 
-  let image = null;
-  const file = $('#pImage').files[0];
-  if (file) {
-    if (!['image/jpeg', 'image/png'].includes(file.type)) return (err.textContent = '图片格式仅支持 JPG / PNG');
-    if (file.size > 5 * 1024 * 1024) return (err.textContent = '图片大小不能超过 5MB');
-    image = await new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(r.result);
-      r.onerror = reject;
-      r.readAsDataURL(file);
-    });
+  // 多图：逐张校验后按选择顺序读成 base64 数组；数组顺序即 sortOrder，第 1 张为主图
+  const files = Array.from($('#pImage').files || []);
+  if (files.length > 9) return (err.textContent = `已选 ${files.length} 张，图片最多 9 张`);
+
+  publishing = true;
+  const submitBtn = $('#pSubmit');
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = '发布中…';
   }
   try {
+    const images = [];
+    for (const f of files) {
+      if (!['image/jpeg', 'image/png'].includes(f.type)) throw new Error(`第 ${images.length + 1} 张格式仅支持 JPG / PNG`);
+      if (f.size > 5 * 1024 * 1024) throw new Error(`第 ${images.length + 1} 张超过 5MB`);
+      images.push(await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        // FileReader 失败（文件被移走 / 权限）过去会变成 unhandled rejection，界面毫无反馈
+        r.onerror = () => reject(new Error(`第 ${images.length + 1} 张读取失败，请重新选择`));
+        r.readAsDataURL(f);
+      }));
+    }
+
     // 契约（ProductPublishRequest）：categoryId 必填二级类别、stock ≥1、images 为 base64 数组
     // 返回 {ok, id}，直接用 id 选中新商品，无需按第一行猜
     const created = await api('/api/seller/products', {
@@ -759,12 +900,14 @@ async function publishProduct() {
         price: priceNum,
         stock: stockNum,
         categoryId: Number(categoryVal),
-        images: image ? [image] : [],
+        // 富文本详情：空串按 null 提交，后端 ProductService 会把 null 转成空串落库
+        richDescription: (($('#pRich') && $('#pRich').value) || '').trim() || null,
+        images,
       },
     });
     toast('商品已发布，进入在售', 'ok');
     publishOpen = false;
-    renderPublishForm();
+    renderPublishForm(); // 表单整块重建，下面的 finally 不再碰旧按钮
     productList.page = 1;
     productList.status = 'all';
     selectedProductId = created && created.id != null ? created.id : null;
@@ -772,6 +915,12 @@ async function publishProduct() {
     loadProducts(true);
   } catch (e) {
     err.textContent = e.message;
+  } finally {
+    publishing = false;
+    if (submitBtn && submitBtn.isConnected) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = '发布商品';
+    }
   }
 }
 
