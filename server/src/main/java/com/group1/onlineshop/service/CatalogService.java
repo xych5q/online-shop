@@ -155,11 +155,21 @@ public class CatalogService {
                 .collect(Collectors.toMap(Category::getId, Category::getName, (a, b) -> a));
     }
 
-    /** 动态条件：状态可见 + 每个关键词都要命中名称或描述（AND）+ 类别集合 */
+    /**
+     * 动态条件：买家可见 + 每个关键词都要命中名称或描述（AND）+ 类别集合。
+     *
+     * <p>裁决 C11：买家列表只展示「在售」与「交易中」（FROZEN 且 frozenBy='auto'）；
+     * 卖家手动停售（FROZEN 且 frozenBy='manual'）不出现。此前按 status 过滤会把 manual
+     * 冻结商品一并算进 total，列表页就会出现「共 N 条」与实际卡片数不符，分页还可能翻出半页。
+     */
     private Specification<Product> spec(List<String> terms, Set<Long> categoryIds) {
         return (root, query, cb) -> {
             List<Predicate> ps = new ArrayList<>();
-            ps.add(root.get("status").in(VISIBLE));
+            ps.add(cb.or(
+                    cb.equal(root.get("status"), Product.Status.ON_SALE),
+                    cb.and(
+                            cb.equal(root.get("status"), Product.Status.FROZEN),
+                            cb.equal(root.get("frozenBy"), "auto"))));
             for (String term : terms) {
                 String like = "%" + term.toLowerCase() + "%";
                 ps.add(cb.or(
