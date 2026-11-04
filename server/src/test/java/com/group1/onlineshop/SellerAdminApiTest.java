@@ -382,6 +382,8 @@ class SellerAdminApiTest {
     void 商品列表状态筛选() throws Exception {
         Product onSale = publishViaApi("在售商品", 3);
         Product soldOut = publishViaApi("售罄商品", 5);
+        soldOut.setImage("soldout.png");   // 旧单图字段：imageUrl 回退路径（主图走 product_image 的用例在 CatalogApiTest 覆盖）
+        productRepository.save(soldOut);
         mockMvc.perform(put("/api/seller/products/" + soldOut.getId() + "/stock")
                         .header("X-Token", login())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -393,7 +395,10 @@ class SellerAdminApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(1))
                 .andExpect(jsonPath("$.items[0].id").value(soldOut.getId()))
-                .andExpect(jsonPath("$.items[0].status").value("sold_out"));
+                .andExpect(jsonPath("$.items[0].status").value("sold_out"))
+                // 评审断言：售罄商品在列表里类别与主图都不为空（前端演示路径）
+                .andExpect(jsonPath("$.items[0].categoryId").value(childId.intValue()))
+                .andExpect(jsonPath("$.items[0].imageUrl").value("/uploads/soldout.png"));
         mockMvc.perform(get("/api/seller/products?status=on_sale").header("X-Token", login()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(1))

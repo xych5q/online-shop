@@ -134,6 +134,28 @@ class SellerHistoryApiTest {
                 .andExpect(jsonPath("$.items[0].phone").value("13800000000"));
     }
 
+    /** 用例 6b（评审断言）：失败意向处置标记——提交一笔失败交易后 disposed=false，作废处置后再查变 true。 */
+    @Test
+    void 失败意向处置标记翻转() throws Exception {
+        Buyer buyer = newBuyer("buyer001");
+        Product product = newProduct("失败商品");
+        Intent intent = newIntent(buyer.getId(), product.getId(), Intent.Status.FAILED, LocalDateTime.now());
+
+        mockMvc.perform(get("/api/seller/products/" + product.getId() + "/intents").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].disposed").value(false));
+
+        mockMvc.perform(post("/api/seller/intents/" + intent.getId() + "/dispose")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"action\":\"void\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/seller/products/" + product.getId() + "/intents").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].disposed").value(true));
+    }
+
     /** 用例 6：隐私——按商品看的响应绝不包含口令码。 */
     @Test
     void 按商品看不泄露口令码() throws Exception {

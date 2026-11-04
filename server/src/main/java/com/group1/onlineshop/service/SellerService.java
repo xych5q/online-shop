@@ -3,6 +3,7 @@ package com.group1.onlineshop.service;
 import com.group1.onlineshop.entity.Buyer;
 import com.group1.onlineshop.entity.Intent;
 import com.group1.onlineshop.entity.Product;
+import com.group1.onlineshop.entity.ProductImage;
 import com.group1.onlineshop.entity.Seller;
 import com.group1.onlineshop.exception.BizException;
 import com.group1.onlineshop.repository.BuyerRepository;
@@ -189,6 +190,10 @@ public class SellerService {
             m.put("status", p.getStatus().name().toLowerCase());
             m.put("stock", p.getStock());
             m.put("price", p.getPrice());
+            m.put("categoryId", p.getCategoryId());
+            m.put("description", p.getDescription());
+            m.put("frozenBy", p.getFrozenBy());
+            m.put("imageUrl", mainImageUrl(p));
             m.put("pendingCount", intentRepository.countByProductIdAndStatus(p.getId(), Intent.Status.QUEUED));
             m.put("inTransaction", intentRepository
                     .findByProductIdAndStatus(p.getId(), Intent.Status.IN_TRANSACTION).isPresent());
@@ -204,6 +209,15 @@ public class SellerService {
         result.put("total", total);
         result.put("items", items);
         return result;
+    }
+
+    /** 主图 = sortOrder 最小的一张；无图时用旧单图字段 image；都没有则返回 null（前端显示占位图，与 CatalogService 同口径） */
+    private String mainImageUrl(Product p) {
+        return productImageRepository.findFirstByProductIdOrderBySortOrderAscIdAsc(p.getId())
+                .map(ProductImage::getFilename)
+                .or(() -> java.util.Optional.ofNullable(p.getImage()))
+                .map(name -> "/uploads/" + name)
+                .orElse(null);
     }
 
     /** 状态筛选参数解析：all → null（不过滤）；非法值抛 400「参数错误」 */
@@ -374,6 +388,8 @@ public class SellerService {
             m.put("username", buyer == null ? null : buyer.getUsername());
             m.put("phone", it.getPhone() == null ? (buyer == null ? null : buyer.getPhone()) : it.getPhone());
             m.put("status", it.getStatus().name().toLowerCase());
+            // 处置标记（评审整改）：前端用它区分「待处置」与「已作废」的失败意向
+            m.put("disposed", it.isDisposed());
             if (it.getStatus() == Intent.Status.QUEUED) {
                 queued++;
                 m.put("position", queued);
