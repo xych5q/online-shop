@@ -166,8 +166,9 @@ public class SellerService {
      * 商品列表（卖家后台管理主入口，评审整改一）。
      * 规则：需卖家鉴权；status 取值 all / on_sale / frozen / off_shelf / sold_out（默认 all），
      * 非法值 400「参数错误」；按创建时间倒序；page 从 1 起、每页 size 条（默认 10），越界取最后一页；
-     * 每项含 {id,name,status,stock,price,categoryId,description,frozenBy,imageUrl,pendingCount,inTransaction,createdAt}，
+     * 每项含 {id,name,status,stock,price,categoryId,description,frozenBy,imageUrl,images,pendingCount,inTransaction,createdAt}，
      * 出参另有 {ok,page,pageSize,totalPages,total}——
+     * imageUrl 为主图（sortOrder 最小），images 为全部图片（同序，第一条即主图），与买家侧详情页出参同名同序；
      * pendingCount 为该商品排队中意向数，inTransaction 为该商品是否存在进行中交易；
      * frozenBy 仅在冻结态有值（auto 交易中 / manual 手动停售），其余为 null；
      * 售罄商品从 status=sold_out 筛进来管理（补货入口），历史接口保持「只收手动下架」语义不动。
@@ -198,6 +199,9 @@ public class SellerService {
             m.put("description", p.getDescription());
             m.put("frozenBy", p.getFrozenBy());
             m.put("imageUrl", mainImageUrl(p));
+            m.put("images", productImageRepository.findByProductIdOrderBySortOrderAscIdAsc(p.getId()).stream()
+                    .map(img -> "/uploads/" + img.getFilename())
+                    .toList());
             m.put("pendingCount", intentRepository.countByProductIdAndStatus(p.getId(), Intent.Status.QUEUED));
             m.put("inTransaction", intentRepository
                     .findByProductIdAndStatus(p.getId(), Intent.Status.IN_TRANSACTION).isPresent());
