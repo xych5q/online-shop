@@ -461,3 +461,26 @@ body {
 .cat-tag { font-size: 11px; padding: 1px 6px; border-radius: 6px; background: #eef3fe; color: var(--primary); }
 .cat-tag.l2 { background: #f1f3f8; color: var(--text-2); }
 
+
+/* ---------- 卖家后台：商品列表（A.1.1-1 多商品） ---------- */
+.card h2 .btn { margin-left: auto; }
+.pl-filter { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.pl-filter button {
+  border: 1px solid var(--border); background: #fff; color: var(--text-2);
+  border-radius: 999px; padding: 5px 14px; font-size: 12px; cursor: pointer; font-family: inherit;
+}
+.pl-filter button.active { background: #e7edfd; border-color: #c7d7fb; color: var(--primary); font-weight: 600; }
+.pl-list { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.pl-row {
+  display: flex; align-items: center; gap: 14px; padding: 12px 14px;
+  border-bottom: 1px solid #eef1f7; cursor: pointer; background: #fff; transition: background .15s;
+}
+.pl-row:last-child { border-bottom: none; }
+.pl-row:hover { background: #f7f9fe; }
+.pl-row.active { background: #f0f5ff; box-shadow: inset 3px 0 0 var(--primary); }
+.pl-main { flex: 1; min-width: 0; }
+.pl-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-meta { font-size: 12px; color: var(--text-2); margin-top: 4px; }
+.pl-num { text-align: right; flex: none; width: 110px; }
+.pl-price { color: var(--danger); font-weight: 700; font-size: 14px; }
+.pl-state { flex: none; width: 118px; text-align: right; }
