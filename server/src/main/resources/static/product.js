@@ -182,6 +182,11 @@ function renderDetail(p) {
   currentProduct = p;
   const area = $('#detailArea');
   const st = buyStateOf(p);
+  /* 富文本先净化再判空：只有净化后仍有内容（文字或图片/视频/表格/分隔线）才渲染整段「商品描述」区块，
+     避免卖家没写详情时页面上留一个空标题 */
+  const richHtml = sanitizeRich(p.richDescription || '');
+  const hasRich = /<(img|video|source|table|hr|br)\b/i.test(richHtml)
+    || richHtml.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, '').trim() !== '';
   /* 主图取第一张：优先 images[0]，其次列表主图 imageUrl，都没有则占位图 */
   const imgs = (p.images && p.images.length) ? p.images.slice() : (p.imageUrl ? [p.imageUrl] : []);
   const mainPic = imgs.length
@@ -212,15 +217,13 @@ function renderDetail(p) {
         ${st.note ? `<div class="deal-banner">${st.note}</div>` : ''}
       </div>
     </div>
-    <div class="divider"></div>
-    <div class="section-title">商品描述（富文本）</div>
-    <div class="rich" id="rich"></div>
+    ${hasRich ? '<div class="divider"></div><div class="section-title">商品描述（富文本）</div><div class="rich" id="rich"></div>' : ''}
   `;
 
   /* 富文本渲染：先白名单净化再写入 innerHTML，不裸用后端字符串；
-     描述为空时留空，不显示默认文案（US-17 线框图脚注） */
+     描述为空（或净化后为空）时整段区块不渲染，不显示默认文案（US-17 线框图脚注） */
   const rich = $('#rich');
-  if (rich) rich.innerHTML = sanitizeRich(p.richDescription);
+  if (rich) rich.innerHTML = richHtml;
 
   area.querySelectorAll('img').forEach(attachImgFallback);
 

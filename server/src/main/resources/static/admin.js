@@ -127,8 +127,9 @@ function hasLeafCategory() {
  *        → { ok, page, totalPages, total, items:[{id,name,status,stock,price,pendingCount,
  *            inTransaction,frozenBy,imageUrl,description,categoryId,createdAt}] }
  *   详情 = 列表项（名称 / 价格 / 库存 / 状态 / 冻结类型 / 主图 / 描述 / 类别）+ 该商品全部意向 GET .../{id}/intents
- *        不请求买家侧 GET /api/products/{id}：CatalogService.detail 只放行在售与冻结，
- *        售罄 / 已下架必然 404，所需的展示字段列表接口已一并返回。
+ *        图集另外解析：列表项带 images / imageUrls 就直接用；只带主图时，对在售 / 冻结商品
+ *        补一次公开详情 GET /api/products/{id}（只有它返回 images）——售罄 / 已下架必然 404，
+ *        退化为单张主图，见 resolveProductImages()。
  *   待处理失败意向 = 该商品 intents 中 status=failed 且 disposed 不为 true 的（不依赖 overview）。
  */
 let productList = { page: 1, size: 10, status: 'all', items: [], total: 0, totalPages: 1 };
@@ -139,6 +140,36 @@ let lastListJson = '';
 // 详情数据的快照：轮询每 5 秒 loadDetail 一次，数据没变就不重绘，
 // 否则买家缩略图选中态会被打回第一张、图片也会闪一下
 let lastDetailJson = null;
+
+/**
+ * 详情图集（发表单支持 9 张，后台要能看到 9 张，否则等于只有主图）。
+ * 优先用列表项里下发的 images / imageUrls；老版本列表接口只给主图 imageUrl，
+ * 此时对买家可见的商品（在售 / 冻结）补一次公开详情 GET /api/products/{id} 拿 images，
+ * 售罄 / 已下架的公开详情必然 404，退化为只显示主图。
+ * 结果按商品 id 缓存：图片发布后不可改，避免 5 秒轮询反复请求。
+ */
+const imageCache = new Map();
+async function resolveProductImages(row) {
+  const own = Array.isArray(row.images) ? row.images
+    : Array.isArray(row.imageUrls) ? row.imageUrls : null;
+  if (own && own.length) return own.slice();
+  if (imageCache.has(row.id)) return imageCache.get(row.id);
+  let list = row.imageUrl ? [row.imageUrl] : [];
+  if (row.status === 'on_sale' || row.status === 'frozen') {
+    try {
+      const d = await api(`/api/products/${row.id}`);
+      const imgs = d && d.product && d.product.images;
+      if (Array.isArray(imgs) && imgs.length) list = imgs.slice();
+    } catch (e) {
+      // 拿不到图集不影响详情其余部分，保留主图
+    }
+  }
+  imageCache.set(row.id, list);
+  return list;
+}
+
+/** 上一次点开的缩略图下标：轮询重绘后接着显示同一张，不被打回第一张 */
+const picIndexById = new Map();
 
 /* 列表请求序号：5 秒轮询与手动翻页 / 切筛选可能并发，只认最后一次 */
 let listSeq = 0;
@@ -385,6 +416,9 @@ async function loadDetail() {
   }
   if (id !== selectedProductId) return;   // 等待期间用户已切换商品，丢弃旧结果
 
+  const images = await resolveProductImages(row);
+  if (id !== selectedProductId) return;
+
   const queue = intents.filter((i) => i.status === 'queued');
   const currentDeal = intents.find((i) => i.status === 'in_transaction') || null;
   // 待处理 = 交易失败且未处置。disposed 由 .../{id}/intents 下发；
@@ -401,6 +435,7 @@ async function loadDetail() {
       // 冻结类型只认接口下发的 frozenBy，缺失时为 null（徽标降级为「已冻结」）
       frozenBy: row.frozenBy == null ? null : row.frozenBy,
       imageUrl: row.imageUrl || null,
+      images,
       description: row.description || '',
       categoryId: row.categoryId == null ? null : row.categoryId,
       publishedAt: row.createdAt,
@@ -433,9 +468,20 @@ function renderDetail() {
   const d = selectedDetail;
   const p = d.product;
 
-  const pic = p.imageUrl
-    ? `<img src="${esc(p.imageUrl)}" alt="">`
+  // 图集：接口没给 images 时退化为单张主图；无图仍用占位图标
+  const pics = Array.isArray(p.images) && p.images.length
+    ? p.images
+    : (p.imageUrl ? [p.imageUrl] : []);
+  const pic = pics.length
+    ? `<img src="${esc(pics[0])}" alt="">`
     : `<svg width="70" height="70" viewBox="0 0 24 24" fill="none" stroke="#b8c1d4" stroke-width="1.4"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="M3.5 18l5-5 3.5 3.5L16 12l4.5 4.5"/></svg>`;
+  const thumbs = pics.length > 1
+    ? `<div class="thumbs">${pics.map((src, i) =>
+        `<button type="button" class="thumb${i === 0 ? ' active' : ''}" data-src="${esc(src)}" title="第 ${i + 1} 张 · 共 ${pics.length} 张"><img src="${esc(src)}" alt="第 ${i + 1} 张"><span class="thumb-no">${i + 1}</span></button>`).join('')}</div>`
+    : '';
+  const picTip = pics.length > 1
+    ? `<div class="pic-tip">共 ${pics.length} 张 · 第 1 张为主图</div>`
+    : '';
 
   let dealInfo = '';
   if (d.currentDeal) {
@@ -487,7 +533,11 @@ function renderDetail() {
     ${dealInfo}
     <div class="divider"></div>
     <div class="product">
-      <div class="pic">${pic}</div>
+      <div class="gallery">
+        <div class="pic">${pic}</div>
+        ${thumbs}
+        ${picTip}
+      </div>
       <div class="info">
         <div class="name">${esc(p.name)}</div>
         <div class="price"><small>￥</small>${fmtPrice(p.price)}</div>
@@ -498,13 +548,37 @@ function renderDetail() {
     </div>
   `;
 
-  // 主图加载失败（文件缺失 / 服务端未映射上传目录）降级为文字，不显示浏览器破图图标
-  const picBox = card.querySelector('.pic');
-  const picImg = picBox && picBox.querySelector('img');
-  if (picImg) {
-    picImg.addEventListener('error', () => {
+  // 主图加载失败（文件缺失 / 服务端未映射上传目录）降级为文字，不显示浏览器破图图标；
+  // 缩略图加载失败只隐藏该张，其余仍可点
+  const gallery = card.querySelector('.gallery');
+  const picBox = gallery && gallery.querySelector('.pic');
+  const bindMainPicError = () => {
+    const img = picBox && picBox.querySelector('img');
+    if (!img) return;
+    img.addEventListener('error', () => {
       picBox.innerHTML = '<span class="muted" style="font-size:12px">图片加载失败</span>';
     });
+  };
+  bindMainPicError();
+
+  if (gallery && pics.length > 1) {
+    const thumbBtns = Array.from(gallery.querySelectorAll('.thumb'));
+    const showPic = (idx) => {
+      const btn = thumbBtns[idx];
+      if (!btn) return;
+      thumbBtns.forEach((b, i) => b.classList.toggle('active', i === idx));
+      picIndexById.set(p.id, idx);
+      picBox.innerHTML = `<img src="${esc(btn.dataset.src)}" alt="">`;
+      bindMainPicError();
+    };
+    thumbBtns.forEach((b, i) => {
+      const im = b.querySelector('img');
+      if (im) im.addEventListener('error', () => { b.style.visibility = 'hidden'; });
+      b.addEventListener('click', () => showPic(i));
+    });
+    // 5 秒轮询重绘后接着显示上次看的那张，不被打回第一张
+    const keep = picIndexById.get(p.id) || 0;
+    if (keep > 0) showPic(keep);
   }
 
   const bind = (sel, fn) => { const el = $(sel); if (el) el.addEventListener('click', fn); };
