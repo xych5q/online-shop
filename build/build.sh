@@ -17,8 +17,8 @@ mvn -B compile
 echo "==> 3/4 test"
 mvn -B test
 
-echo "==> 4/4 package"
-mvn -B package
+echo "==> 4/4 package（测试已在第 3 步跑过，此处跳过以免重复执行）"
+mvn -B package -DskipTests
 
 echo "==> 构建完成，产物："
 ls -lh target/*.jar

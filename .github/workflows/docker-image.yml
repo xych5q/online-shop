@@ -2,7 +2,7 @@
 # 云端构建 Docker 镜像（本机没有 Docker 时的验收入口）
 #
 # 触发：
-#   ① 推送 v* 标签时自动跑（例如 tag v0.1-iter1）
+#   ① 推送 v* 标签时自动跑（例如 tag v0.2-iter2）
 #   ②  Actions 页面手动点 "Run workflow"（可自定义镜像 tag）
 #
 # 产出：
@@ -11,8 +11,8 @@
 #   - docker save 出的 tar 作为 Release 附件，可直接下载当验收材料
 #
 # 验收时怎么用：
-#   docker pull ghcr.io/xych5q/online-shop:0.1-iter1
-#   docker run -d --name online-shop -p 8080:8080 ghcr.io/xych5q/online-shop:0.1-iter1
+#   docker pull ghcr.io/xych5q/online-shop:0.2-iter2
+#   docker run -d --name online-shop -p 8080:8080 ghcr.io/xych5q/online-shop:0.2-iter2
 # ============================================================================
 
 name: Docker Image
@@ -76,12 +76,12 @@ jobs:
             ghcr.io/xych5q/online-shop:${{ steps.ver.outputs.tag }}
             ghcr.io/xych5q/online-shop:latest
 
-      - name: 起容器并跑接口冒烟（44 项断言）
+      - name: 起容器并跑接口冒烟（60 项断言）
         run: |
           docker run -d --name shop -p 8080:8080 \
             ghcr.io/xych5q/online-shop:${{ steps.ver.outputs.tag }}
           for i in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/product || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/products || true)
             [ "$code" = "200" ] && break
             sleep 2
           done

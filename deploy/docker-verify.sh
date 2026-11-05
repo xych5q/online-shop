@@ -12,6 +12,7 @@
 #   IMAGE_TAG   镜像标签，默认 online-shop:0.2
 #   HOST_PORT   宿主机映射端口，默认 8080
 #   OUT_DIR     镜像 tar 输出目录，默认 ./dist
+#   TAR_NAME    导出的 tar 文件名，默认 online-shop-0.2-iter2.tar
 #
 # 依赖：docker、curl。Windows 下用 Git Bash 执行。
 # ============================================================================
@@ -21,6 +22,7 @@ IMAGE_TAG="${IMAGE_TAG:-online-shop:0.2}"
 CONTAINER_NAME="${CONTAINER_NAME:-online-shop-verify}"
 HOST_PORT="${HOST_PORT:-8080}"
 OUT_DIR="${OUT_DIR:-./dist}"
+TAR_NAME="${TAR_NAME:-online-shop-0.2-iter2.tar}"
 SMOKE="test-cases/api-smoke-iter2.sh"
 
 ok()   { printf '  [\033[32m OK \033[0m] %s\n' "$1"; }
@@ -53,7 +55,7 @@ else
 fi
 
 # ---------- 1. 构建镜像 ----------
-info "构建镜像：$IMAGE_TAG（首次会从 Maven 中央仓拉依赖，约 2~5 分钟）"
+info "构建镜像：$IMAGE_TAG（首次会从 Maven 中央仓拉依赖，约 2 至 5 分钟）"
 BUILD_START=$(date +%s)
 docker build -f deploy/Dockerfile -t "$IMAGE_TAG" . 2>&1 | tail -20
 BUILD_RC=${PIPESTATUS[0]}
@@ -78,7 +80,7 @@ ok "容器已启动：$CONTAINER_NAME"
 info "等待服务就绪（最多 60 秒）"
 READY=0
 for i in $(seq 1 60); do
-  CODE=$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' "http://localhost:$HOST_PORT/api/product" 2>/dev/null)
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' "http://localhost:$HOST_PORT/api/products" 2>/dev/null)
   [ "$CODE" = "200" ] && { READY=1; break; }
   sleep 1
 done
@@ -98,7 +100,7 @@ fi
 # ---------- 5. 导出镜像 ----------
 info "导出镜像到 $OUT_DIR"
 mkdir -p "$OUT_DIR"
-TAR="$OUT_DIR/online-shop-0.2-iter2.tar"
+TAR="$OUT_DIR/$TAR_NAME"
 docker save "$IMAGE_TAG" -o "$TAR" && ok "镜像已导出：$TAR（$(wc -c < "$TAR" 2>/dev/null | tr -d ' ') 字节）"
 
 echo "=============================================================="
