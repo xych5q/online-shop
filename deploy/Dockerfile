@@ -3,7 +3,7 @@
 # 第 1 组（组长：陈星宇） | 迭代 2 基线 v0.2-iter2
 #
 # 构建上下文必须是**仓库根目录**（因为要 COPY server/*）：
-#   docker build -f deploy/Dockerfile -t online-shop:0.1 .
+#   docker build -f deploy/Dockerfile -t online-shop:0.2 .
 # 说明：builder 阶段跑 -DskipTests，单测在宿主机由 `mvn test` 单独执行，
 #       避免镜像构建被测试拖慢、也避免把测试数据打进镜像。
 # ============================================================================
