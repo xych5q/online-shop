@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================================
 # 在线购物系统 · Docker 镜像一键构建 + 部署验证
-# 第 1 组（组长：陈星宇） | 迭代 1 基线 v0.1-iter1
+# 第 1 组（组长：陈星宇） | 迭代 2 · 挑战需求 A（tag v0.2-iter2）
 #
 # 用途：在有 Docker 的机器上一键完成「构建镜像 → 起容器 → 等就绪 → 跑接口冒烟」，
 #       并把产物 tar 导出作验收材料。全过程结果写屏，可直接截图作为部署证据。
@@ -9,7 +9,7 @@
 # 用法（仓库根目录执行）：
 #   bash deploy/docker-verify.sh
 # 可选环境变量：
-#   IMAGE_TAG   镜像标签，默认 online-shop:0.1
+#   IMAGE_TAG   镜像标签，默认 online-shop:0.2
 #   HOST_PORT   宿主机映射端口，默认 8080
 #   OUT_DIR     镜像 tar 输出目录，默认 ./dist
 #
@@ -17,11 +17,11 @@
 # ============================================================================
 
 set -u
-IMAGE_TAG="${IMAGE_TAG:-online-shop:0.1}"
+IMAGE_TAG="${IMAGE_TAG:-online-shop:0.2}"
 CONTAINER_NAME="${CONTAINER_NAME:-online-shop-verify}"
 HOST_PORT="${HOST_PORT:-8080}"
 OUT_DIR="${OUT_DIR:-./dist}"
-SMOKE="test-cases/api-smoke.sh"
+SMOKE="test-cases/api-smoke-iter2.sh"
 
 ok()   { printf '  [\033[32m OK \033[0m] %s\n' "$1"; }
 info() { printf '  [....] %s\n' "$1"; }
@@ -41,7 +41,7 @@ echo "=============================================================="
 
 # ---------- 0. 先跑一遍单测，保证进镜像的代码是绿的 ----------
 if command -v mvn >/dev/null 2>&1; then
-  info "先在宿主机跑 JUnit 单测（18 组）..."
+  info "先在宿主机跑 JUnit 单测（77 条）..."
   if (cd server && mvn -B -q test) >/tmp/_mvntest.log 2>&1; then
     ok "单测通过，继续构建镜像"
   else
@@ -98,7 +98,7 @@ fi
 # ---------- 5. 导出镜像 ----------
 info "导出镜像到 $OUT_DIR"
 mkdir -p "$OUT_DIR"
-TAR="$OUT_DIR/online-shop-0.1-iter1.tar"
+TAR="$OUT_DIR/online-shop-0.2-iter2.tar"
 docker save "$IMAGE_TAG" -o "$TAR" && ok "镜像已导出：$TAR（$(wc -c < "$TAR" 2>/dev/null | tr -d ' ') 字节）"
 
 echo "=============================================================="
