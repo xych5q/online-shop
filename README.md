@@ -47,9 +47,10 @@
 - 需求：[需求规格说明书 v1.6](https://github.com/xych5q/online-shop/wiki/需求规格说明书)（Wiki）｜ [docs/requirements](docs/requirements/)
 - 设计：[接口设计](https://github.com/xych5q/online-shop/wiki/接口设计)（Wiki）｜ [前端页面说明](https://github.com/xych5q/online-shop/wiki/前端页面说明)（Wiki）
 - 迭代管理：[冲刺订单（迭代 2）](https://github.com/xych5q/online-shop/wiki/冲刺订单（迭代2）)（Wiki）
-- 测试：[测试用例清单 · 迭代 2](test-cases/测试用例清单-迭代2.md) ｜ [第 3 次测试记录](https://github.com/xych5q/online-shop/wiki/第3次测试记录)（Wiki）
+- 测试：[测试用例清单 · 迭代 2](test-cases/测试用例清单-迭代2.md) ｜ [第 3 次测试记录](https://github.com/xych5q/online-shop/wiki/第3次测试记录)（Wiki）｜ [测试执行手册](https://github.com/xych5q/online-shop/wiki/测试执行手册)（Wiki）
 - 构建与部署：[构建手册](build/构建手册.md) ｜ [部署手册](deploy/部署手册.md) ｜ [Wiki 版](https://github.com/xych5q/online-shop/wiki/构建与部署手册)
 - 报告：[第 1 次](docs/reports/第1次阶段性评审报告.md)（仓库）｜ 第 2、3 次在 Wiki
+- 成果验收：[阶段性成果验收](https://github.com/xych5q/online-shop/wiki/阶段性成果验收)（Wiki，第二次为需求 A）
 - 协作规范：[CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## 五、目录结构
@@ -62,10 +63,13 @@
 │   ├── pom.xml
 │   └── src/
 │       ├── main/java/com/group1/onlineshop/
+│       │   ├── OnlineShopApplication.java
 │       │   ├── controller/   5 个控制器，32 个接口
 │       │   ├── service/      业务逻辑（交易、商品、卖家、目录）
+│       │   ├── dto/          请求与响应对象
 │       │   ├── entity/       实体与状态枚举
 │       │   ├── repository/   数据访问
+│       │   ├── exception/    业务异常与统一错误处理
 │       │   └── config/       静态资源映射、旧数据迁移、初始化
 │       ├── main/resources/static/   前端静态页与脚本
 │       └── test/java/        7 个测试类，77 条用例
@@ -75,7 +79,7 @@
 └── docs/                     需求、设计、报告与汇报材料
     ├── requirements/         需求规格说明书、用户故事、用例表、流程图、问题库
     ├── design/               接口设计、前端页面说明、实现进度、截图
-    ├── reports/              第 1 次评审报告与三次测试记录
+    ├── reports/              第 1 次评审报告与第 1 至 3 次测试记录
     └── slides/               评审汇报材料与演示录屏
 ```
 
@@ -83,14 +87,29 @@
 
 见 [build/构建手册.md](build/构建手册.md) 与 [deploy/部署手册.md](deploy/部署手册.md)。
 
+源码构建（Maven 工程在 `server/` 子目录，pom.xml 不在仓库根目录）：
+
 ```bash
 cd server
-mvn clean package                                  # 构建，产出可执行 jar
-mvn test                                           # 全量单元测试，77 条
-java -jar target/online-shop-1.0.0-SNAPSHOT.jar    # 运行，默认 8080 端口
-
-docker build -t online-shop:0.2-iter2 -f deploy/Dockerfile .
-docker run -p 8080:8080 online-shop:0.2-iter2
+mvn clean package                        # 构建，产出 target/online-shop.jar
+mvn test                                 # 全量单元测试，77 条
+java -jar target/online-shop.jar         # 运行，默认 8080 端口
 ```
 
-默认使用 H2 内存库，启动时由 `DataInitializer` 造演示数据；上传图片存放在 `./data/uploads`，由 `/uploads/**` 映射对外提供。演示脚本与验收流程见 `test-cases/`。
+或一条命令跑完构建与验收（在仓库根目录执行）：
+
+```bash
+bash build/build.sh                      # 清理、编译、单测、打包
+bash test-cases/verify-all.sh            # 单测 77 条 + 干净库起服务 + 冒烟 60 项 + 后台演示 18 项
+```
+
+容器化部署（构建上下文是仓库根目录，命令也在根目录执行）：
+
+```bash
+docker build -f deploy/Dockerfile -t online-shop:0.2-iter2 .
+docker run -d -p 8080:8080 online-shop:0.2-iter2
+# 或直接拉取验收用镜像
+docker pull ghcr.io/xych5q/online-shop:0.2-iter2
+```
+
+默认使用 H2 **文件库**，数据落在 `server/data/`，重启不丢失；首次启动由 `DataInitializer` 自动创建卖家账号 `admin`（初始密码见 `application.yml` 的 `app.seller.password`），不创建商品数据。上传图片存放在 `./data/uploads`，由 `/uploads/**` 映射对外提供。
