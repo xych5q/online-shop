@@ -1,0 +1,648 @@
+package com.group1.onlineshop;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.group1.onlineshop.entity.Category;
+import com.group1.onlineshop.entity.Intent;
+import com.group1.onlineshop.entity.Product;
+import com.group1.onlineshop.entity.ProductImage;
+import com.group1.onlineshop.entity.StockLog;
+import com.group1.onlineshop.repository.CategoryRepository;
+import com.group1.onlineshop.repository.IntentRepository;
+import com.group1.onlineshop.repository.ProductImageRepository;
+import com.group1.onlineshop.repository.ProductRepository;
+import com.group1.onlineshop.repository.StockLogRepository;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+
+import java.math.BigDecimal;
+import java.util.List;
+
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.nullValue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * 卖家后台管理接口 HTTP 层测试（挑战需求 A.1.2 类别管理 / A.1.2-4 改挂类别 / A.1.3-5 调库存 / 上下架）。
+ * 用 MockMvc 走真实 Spring MVC 链路，统一异常返回经 GlobalExceptionHandler 后断言。
+ * 规则以 docs/design/接口设计-卖家后台管理.md 为准。
+ */
+@SpringBootTest
+@AutoConfigureMockMvc
+class SellerAdminApiTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
+    private ProductRepository productRepository;
+
+    @Autowired
+    private IntentRepository intentRepository;
+
+    @Autowired
+    private CategoryRepository categoryRepository;
+
+    @Autowired
+    private StockLogRepository stockLogRepository;
+
+    @Autowired
+    private ProductImageRepository productImageRepository;
+
+    /** 每个用例的固定夹具：一级「测试分类」 + 二级「测试子类」 */
+    private Long rootId;
+    private Long childId;
+
+    /** 每个用例前清空业务数据（H2 文件库跨测试持久化，必须清理；seller 账号由 DataInitializer 维护，不动） */
+    @BeforeEach
+    void cleanUp() {
+        stockLogRepository.deleteAll();
+        intentRepository.deleteAll();
+        productImageRepository.deleteAll();
+        productRepository.deleteAll();
+        categoryRepository.deleteAll();
+        Category root = new Category();
+        root.setName("测试分类");
+        root.setParentId(null);
+        rootId = categoryRepository.save(root).getId();
+        Category child = new Category();
+        child.setName("测试子类");
+        child.setParentId(rootId);
+        childId = categoryRepository.save(child).getId();
+    }
+
+    // ---------- 类别管理 ----------
+
+    /** 用例 1：新增一级类别成功（parentId 不传）。 */
+    @Test
+    void 新增一级类别成功() throws Exception {
+        mockMvc.perform(post("/api/seller/categories")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"图书\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true))
+                .andExpect(jsonPath("$.id").isNumber())
+                .andExpect(jsonPath("$.name").value("图书"))
+                .andExpect(jsonPath("$.parentId").isEmpty());
+    }
+
+    /** 用例 2：在一级类别下新增二级类别成功。 */
+    @Test
+    void 新增二级类别成功() throws Exception {
+        mockMvc.perform(post("/api/seller/categories")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"小说\",\"parentId\":" + rootId + "}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true))
+                .andExpect(jsonPath("$.parentId").value(rootId));
+    }
+
+    /** 用例 3：缺名称新增 → 400「类别名称必填」。 */
+    @Test
+    void 缺名称新增被拒() throws Exception {
+        mockMvc.perform(post("/api/seller/categories")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("类别名称必填"));
+    }
+
+    /** 用例 4：父类别不存在 → 404「父类别不存在」。 */
+    @Test
+    void 父类别不存在被拒() throws Exception {
+        mockMvc.perform(post("/api/seller/categories")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"小说\",\"parentId\":999}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("父类别不存在"));
+    }
+
+    /** 用例 5：同级重名 → 400「同级类别名称已存在」。 */
+    @Test
+    void 同级重名被拒() throws Exception {
+        mockMvc.perform(post("/api/seller/categories")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"测试分类\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("同级类别名称已存在"));
+    }
+
+    /** 用例 6：改名成功且落库。 */
+    @Test
+    void 改名成功() throws Exception {
+        mockMvc.perform(put("/api/seller/categories/" + childId)
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"数码配件\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true));
+        assertEquals("数码配件", categoryRepository.findById(childId).orElseThrow().getName());
+    }
+
+    /** 用例 7：删除挂着商品的二级类别 → 400「该类别下还有商品，不能删除」。 */
+    @Test
+    void 有商品的类别不可删() throws Exception {
+        createOnSaleProduct();
+        mockMvc.perform(delete("/api/seller/categories/" + childId)
+                        .header("X-Token", login()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("该类别下还有商品，不能删除"));
+    }
+
+    /** 用例 8：删除还有子类别的一级类别 → 400「请先删除该类别下的子类别」。 */
+    @Test
+    void 有子类别的类别不可删() throws Exception {
+        mockMvc.perform(delete("/api/seller/categories/" + rootId)
+                        .header("X-Token", login()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("请先删除该类别下的子类别"));
+    }
+
+    /** 用例 9：删除空二级类别成功。 */
+    @Test
+    void 删除空类别成功() throws Exception {
+        mockMvc.perform(delete("/api/seller/categories/" + childId)
+                        .header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true));
+        assertEquals(1, categoryRepository.count());
+    }
+
+    // ---------- 商品管理 ----------
+
+    /** 用例 10：改挂类别成功且落库。 */
+    @Test
+    void 改挂类别成功() throws Exception {
+        Product product = createOnSaleProduct();
+        Category other = categoryRepository.save(newChild("另一个子类"));
+        mockMvc.perform(put("/api/seller/products/" + product.getId() + "/category")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"categoryId\":" + other.getId() + "}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true));
+        assertEquals(other.getId(), productRepository.findById(product.getId()).orElseThrow().getCategoryId());
+    }
+
+    /** 用例 11：挂一级类别被拒 → 400「商品必须挂到二级类别」。 */
+    @Test
+    void 挂一级类别被拒() throws Exception {
+        Product product = createOnSaleProduct();
+        mockMvc.perform(put("/api/seller/products/" + product.getId() + "/category")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"categoryId\":" + rootId + "}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("商品必须挂到二级类别"));
+    }
+
+    /** 用例 12：调库存成功并写流水（操作人/调整前后/变动量可查）。 */
+    @Test
+    void 调库存成功并写流水() throws Exception {
+        Product product = createOnSaleProduct(); // stock=5
+        mockMvc.perform(put("/api/seller/products/" + product.getId() + "/stock")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"stock\":20,\"reason\":\"补货\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.stock").value(20))
+                .andExpect(jsonPath("$.status").value("on_sale"));
+        List<StockLog> logs = stockLogRepository.findByProductIdOrderByIdDesc(product.getId());
+        // 不数总条数：发布时若补记入库流水，条数会变；只锁定本次调库存这一笔
+        StockLog log = logs.stream()
+                .filter(l -> l.getChangeAmount() != null && l.getChangeAmount() == 15)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("未找到本次调库存 +15 的流水"));
+        assertEquals("admin", log.getOperator());
+        assertEquals(5, log.getBeforeStock());
+        assertEquals(20, log.getAfterStock());
+        assertEquals(15, log.getChangeAmount());
+        assertEquals("补货", log.getReason());
+    }
+
+    /** 用例 13：负库存被拒 → 400「库存不能为负数」。 */
+    @Test
+    void 负库存被拒() throws Exception {
+        Product product = createOnSaleProduct();
+        mockMvc.perform(put("/api/seller/products/" + product.getId() + "/stock")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"stock\":-3}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("库存不能为负数"));
+    }
+
+    /** 用例 14：在售商品调 0 → 自动售罄；补货 ≥1 → 自动回在售（A.1.3-5）。 */
+    @Test
+    void 调零售罄补货回在售() throws Exception {
+        Product product = createOnSaleProduct();
+        mockMvc.perform(put("/api/seller/products/" + product.getId() + "/stock")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"stock\":0}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("sold_out"));
+        mockMvc.perform(put("/api/seller/products/" + product.getId() + "/stock")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"stock\":5,\"reason\":\"补货\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("on_sale"));
+        // 恒等式（评审整改四）：ΣchangeAmount = 当前库存（夹具已补「夹具入库」初始流水）
+        List<StockLog> logs = stockLogRepository.findByProductIdOrderByIdDesc(product.getId());
+        int sum = logs.stream().mapToInt(StockLog::getChangeAmount).sum();
+        int stock = productRepository.findById(product.getId()).orElseThrow().getStock();
+        assertEquals(sum, stock);
+        assertTrue(logs.stream().anyMatch(l -> l.getChangeAmount() != null && l.getChangeAmount() == -5));
+        assertTrue(logs.stream().anyMatch(l -> l.getChangeAmount() != null && l.getChangeAmount() == 5));
+    }
+
+    /** 用例 14b（评审整改四验收）：发布商品后立刻写 1 条「发布入库」流水，ΣchangeAmount = 当前库存。 */
+    @Test
+    void 发布商品写初始流水() throws Exception {
+        mockMvc.perform(post("/api/seller/products")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"发布流水商品\",\"categoryId\":" + childId
+                                + ",\"description\":\"x\",\"price\":29.9,\"stock\":7}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true));
+
+        Product product = productRepository.findAll().get(0);
+        List<StockLog> logs = stockLogRepository.findByProductIdOrderByIdDesc(product.getId());
+        assertEquals(1, logs.size());
+        StockLog log = logs.get(0);
+        assertEquals("admin", log.getOperator());
+        assertEquals(0, log.getBeforeStock());
+        assertEquals(7, log.getAfterStock());
+        assertEquals(7, log.getChangeAmount());
+        assertEquals("发布入库", log.getReason());
+        assertEquals(logs.stream().mapToInt(StockLog::getChangeAmount).sum(),
+                productRepository.findById(product.getId()).orElseThrow().getStock(),
+                "ΣchangeAmount = 当前库存");
+    }
+
+    /** 用例 15：手动下架后可上架，状态回在售且下架痕迹清空。 */
+    @Test
+    void 下架后可上架() throws Exception {
+        Product product = createOnSaleProduct();
+        mockMvc.perform(post("/api/seller/products/" + product.getId() + "/offshelf")
+                        .header("X-Token", login()))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/api/seller/products/" + product.getId() + "/onshelf")
+                        .header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true));
+        Product saved = productRepository.findById(product.getId()).orElseThrow();
+        assertEquals(Product.Status.ON_SALE, saved.getStatus());
+        assertEquals(null, saved.getClosedAt());
+        assertEquals(null, saved.getOffShelfReason());
+    }
+
+    /** 用例 16：在售商品重复上架被拒 → 400「仅「已下架」商品可上架」。 */
+    @Test
+    void 在售商品上架被拒() throws Exception {
+        Product product = createOnSaleProduct();
+        mockMvc.perform(post("/api/seller/products/" + product.getId() + "/onshelf")
+                        .header("X-Token", login()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("仅「已下架」商品可上架"));
+    }
+
+    /** 用例 17：售罄商品直接上架被拒 → 400「售罄商品请先补库存」（走真实链路：库存调 0 自动售罄）。 */
+    @Test
+    void 售罄商品上架被拒() throws Exception {
+        Product product = createOnSaleProduct();
+        mockMvc.perform(put("/api/seller/products/" + product.getId() + "/stock")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"stock\":0}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("sold_out"));
+        mockMvc.perform(post("/api/seller/products/" + product.getId() + "/onshelf")
+                        .header("X-Token", login()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("售罄商品请先补库存"));
+    }
+
+    /** 用例 18（评审验收）：库存调 0 后，售罄商品仍出现在工作台总览（标 sold_out），且 canPublish 为 true。 */
+    @Test
+    void 售罄商品仍出现在总览() throws Exception {
+        Product product = createOnSaleProduct();
+        mockMvc.perform(put("/api/seller/products/" + product.getId() + "/stock")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"stock\":0}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("sold_out"));
+
+        mockMvc.perform(get("/api/seller/overview").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.detail.product.id").value(product.getId()))
+                .andExpect(jsonPath("$.detail.product.status").value("sold_out"))
+                .andExpect(jsonPath("$.canPublish").value(true));
+    }
+
+    // ---------- 商品列表（评审整改：卖家端列表零覆盖，补 5+1 条） ----------
+
+    /** 用例 19：列表全量与字段——两件商品，倒序（后发的在前），八个字段齐全。 */
+    @Test
+    void 商品列表全量与字段() throws Exception {
+        publishViaApi("列表商品A", 3);
+        publishViaApi("列表商品B", 5);
+        mockMvc.perform(get("/api/seller/products").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.items.length()").value(2))
+                .andExpect(jsonPath("$.items[0].name").value("列表商品B"))   // createdAt 倒序：后发在前
+                .andExpect(jsonPath("$.items[0].id").isNumber())
+                .andExpect(jsonPath("$.items[0].name").isNotEmpty())
+                .andExpect(jsonPath("$.items[0].status").value("on_sale"))
+                .andExpect(jsonPath("$.items[0].stock").value(5))
+                .andExpect(jsonPath("$.items[0].price").value(19.9))
+                .andExpect(jsonPath("$.items[0].pendingCount").value(0))
+                .andExpect(jsonPath("$.items[0].inTransaction").value(false))
+                .andExpect(jsonPath("$.items[0].createdAt").isNotEmpty());
+    }
+
+    /** 用例 24：列表下发全部图片——images 按 sortOrder 升序，第一条与 imageUrl 一致（卖家详情卡多图展示的数据来源）。 */
+    @Test
+    void 商品列表下发全部图片() throws Exception {
+        Product product = publishViaApi("多图商品", 3);
+        for (int order = 2; order >= 1; order--) {   // 倒序落库，验证出参仍按 sortOrder 升序
+            ProductImage image = new ProductImage();
+            image.setProductId(product.getId());
+            image.setFilename("multi_" + order + ".png");
+            image.setSortOrder(order);
+            productImageRepository.save(image);
+        }
+
+        mockMvc.perform(get("/api/seller/products").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].images.length()").value(2))
+                .andExpect(jsonPath("$.items[0].images[0]").value("/uploads/multi_1.png"))
+                .andExpect(jsonPath("$.items[0].images[1]").value("/uploads/multi_2.png"))
+                .andExpect(jsonPath("$.items[0].imageUrl").value("/uploads/multi_1.png"));
+    }
+
+    /** 用例 20：status 筛选——售罄走真实路径（调库存到 0），四种取值各返回正确的子集。 */
+    @Test
+    void 商品列表状态筛选() throws Exception {
+        Product onSale = publishViaApi("在售商品", 3);
+        Product soldOut = publishViaApi("售罄商品", 5);
+        soldOut.setImage("soldout.png");   // 旧单图字段：imageUrl 回退路径（主图走 product_image 的用例在 CatalogApiTest 覆盖）
+        productRepository.save(soldOut);
+        mockMvc.perform(put("/api/seller/products/" + soldOut.getId() + "/stock")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"stock\":0}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("sold_out"));
+
+        mockMvc.perform(get("/api/seller/products?status=sold_out").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(soldOut.getId()))
+                .andExpect(jsonPath("$.items[0].status").value("sold_out"))
+                // 评审断言：售罄商品在列表里类别与主图都不为空（前端演示路径）
+                .andExpect(jsonPath("$.items[0].categoryId").value(childId.intValue()))
+                .andExpect(jsonPath("$.items[0].imageUrl").value("/uploads/soldout.png"));
+        mockMvc.perform(get("/api/seller/products?status=on_sale").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(onSale.getId()));
+        mockMvc.perform(get("/api/seller/products?status=all").header("X-Token", login()))
+                .andExpect(jsonPath("$.total").value(2));
+        mockMvc.perform(get("/api/seller/products").header("X-Token", login()))
+                .andExpect(jsonPath("$.total").value(2));
+    }
+
+    /** 用例 21：非法 status 返回 400「参数错误」。 */
+    @Test
+    void 商品列表非法状态被拒() throws Exception {
+        mockMvc.perform(get("/api/seller/products?status=abc").header("X-Token", login()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("参数错误"));
+    }
+
+    /** 用例 22：分页边界——size=2 分两页；page=0 归一第一页；size=500 压到 100。 */
+    @Test
+    void 商品列表分页边界() throws Exception {
+        publishViaApi("分页商品A", 1);
+        publishViaApi("分页商品B", 1);
+        publishViaApi("分页商品C", 1);
+        mockMvc.perform(get("/api/seller/products?size=2").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalPages").value(2))
+                .andExpect(jsonPath("$.items.length()").value(2));
+        mockMvc.perform(get("/api/seller/products?page=0&size=2").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.items.length()").value(2));
+        mockMvc.perform(get("/api/seller/products?size=500").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.pageSize").value(100));
+    }
+
+    /** 用例 23：未登录（无 X-Token）返回 401。 */
+    @Test
+    void 商品列表未登录被拒() throws Exception {
+        mockMvc.perform(get("/api/seller/products"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("未登录或登录已失效"));
+    }
+
+    /** 用例 24：计数语义——pendingCount 只算 QUEUED，inTransaction 反映进行中交易。 */
+    @Test
+    void 商品列表排队与交易计数() throws Exception {
+        Product product = publishViaApi("计数商品", 5);
+        newIntent(product.getId(), Intent.Status.IN_TRANSACTION);   // 一笔进行中交易
+        newIntent(product.getId(), Intent.Status.QUEUED);           // 一个排队买家
+        mockMvc.perform(get("/api/seller/products").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].pendingCount").value(1))
+                .andExpect(jsonPath("$.items[0].inTransaction").value(true));
+    }
+
+    /** 用例 25：路径存在但方法不支持返回 405「请求方法不支持」，不再落 500 兜底。 */
+    @Test
+    void 方法不支持返回405() throws Exception {
+        // /api/seller/categories 只实现了 POST/PUT/DELETE，GET 落到全局异常
+        mockMvc.perform(get("/api/seller/categories").header("X-Token", login()))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.error").value("请求方法不支持"));
+    }
+
+    /** 用例 26（评审断言）：失败意向处置标记——提交一笔失败交易后 disposed=false，作废处置后再查变 true。 */
+    @Test
+    void 失败意向处置标记翻转() throws Exception {
+        Product product = publishViaApi("失败商品", 5);
+        Intent intent = newIntent(product.getId(), Intent.Status.FAILED);
+
+        mockMvc.perform(get("/api/seller/products/" + product.getId() + "/intents").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].disposed").value(false));
+
+        mockMvc.perform(post("/api/seller/intents/" + intent.getId() + "/dispose")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"action\":\"void\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/seller/products/" + product.getId() + "/intents").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].disposed").value(true));
+    }
+
+    /** 用例 27（评审验收）：图片超 9 张被拒——400，文案含「9」。 */
+    @Test
+    void 图片超9张被拒() throws Exception {
+        mockMvc.perform(post("/api/seller/products")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"十图商品\",\"categoryId\":" + childId
+                                + ",\"description\":\"x\",\"price\":9.9,\"stock\":1,"
+                                + "\"images\":[\"data:image/png;base64,AAAA\",\"data:image/png;base64,AAAA\","
+                                + "\"data:image/png;base64,AAAA\",\"data:image/png;base64,AAAA\","
+                                + "\"data:image/png;base64,AAAA\",\"data:image/png;base64,AAAA\","
+                                + "\"data:image/png;base64,AAAA\",\"data:image/png;base64,AAAA\","
+                                + "\"data:image/png;base64,AAAA\",\"data:image/png;base64,AAAA\"]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value(containsString("9")));
+    }
+
+    /** 用例 28（评审验收）：富文本超 8000 字被拒。 */
+    @Test
+    void 富文本超8000字被拒() throws Exception {
+        String tooLong = "富".repeat(8001);
+        mockMvc.perform(post("/api/seller/products")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"长文商品\",\"categoryId\":" + childId
+                                + ",\"description\":\"x\",\"price\":9.9,\"stock\":1,"
+                                + "\"richDescription\":\"" + tooLong + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value(containsString("8000")));
+    }
+
+    /** 用例 29（评审验收）：frozenBy 三态——auto 冻结、manual 冻结、未冻结在列表里分别显示对应值。 */
+    @Test
+    void 冻结来源三态() throws Exception {
+        publishViaApi("未冻结商品", 1);
+        Product manual = publishViaApi("手动冻结商品", 1);
+        Product auto = publishViaApi("交易冻结商品", 1);
+        manual.setStatus(Product.Status.FROZEN);
+        manual.setFrozenBy("manual");
+        productRepository.save(manual);
+        auto.setStatus(Product.Status.FROZEN);
+        auto.setFrozenBy("auto");
+        productRepository.save(auto);
+
+        mockMvc.perform(get("/api/seller/products").header("X-Token", login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.items[0].frozenBy").value("auto"))     // 最新发布：交易冻结
+                .andExpect(jsonPath("$.items[1].frozenBy").value("manual"))   // 手动冻结
+                .andExpect(jsonPath("$.items[2].frozenBy").value(nullValue())); // 未冻结为 null
+    }
+
+    /** 用例 30（评审验收）：发布侧 script 清洗——description 带 <script>，存进去的内容不含 <script。 */
+    @Test
+    void 发布描述script被剥离() throws Exception {
+        mockMvc.perform(post("/api/seller/products")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"清洗描述商品\",\"categoryId\":" + childId
+                                + ",\"description\":\"<script>alert(1)</script>好物\",\"price\":9.9,\"stock\":1}"))
+                .andExpect(status().isOk());
+        Product saved = productRepository.findAll().get(0);
+        assertTrue(!saved.getDescription().contains("<script"));
+    }
+
+    // ---------- 辅助方法 ----------
+
+    /** 登录卖家账号（admin / seller123，DataInitializer 首次启动创建），返回 token */
+    private String login() throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/seller/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"admin\",\"password\":\"seller123\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString()).get("token").asText();
+    }
+
+    /** 直接落库一个在售商品（挂夹具二级类别，库存 5） */
+    private Product createOnSaleProduct() {
+        Product product = new Product();
+        product.setName("测试商品");
+        product.setDescription("测试描述");
+        product.setPrice(new BigDecimal("99.90"));
+        product.setStock(5);
+        product.setCategoryId(childId);
+        product.setStatus(Product.Status.ON_SALE);
+        productRepository.save(product);
+        // 夹具初始流水（评审整改四）：口径 ΣchangeAmount 恒等于当前库存，直接落库的夹具也要补一笔
+        StockLog initialLog = new StockLog();
+        initialLog.setProductId(product.getId());
+        initialLog.setOperator("SYSTEM");
+        initialLog.setBeforeStock(0);
+        initialLog.setAfterStock(5);
+        initialLog.setChangeAmount(5);
+        initialLog.setReason("夹具入库");
+        stockLogRepository.save(initialLog);
+        return product;
+    }
+
+    /** 通过发布接口真实发布一件商品（含发布流水），返回落库商品 */
+    private Product publishViaApi(String name, int stock) throws Exception {
+        mockMvc.perform(post("/api/seller/products")
+                        .header("X-Token", login())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"" + name + "\",\"categoryId\":" + childId
+                                + ",\"description\":\"x\",\"price\":19.9,\"stock\":" + stock + "}"))
+                .andExpect(status().isOk());
+        return productRepository.findAll().stream()
+                .filter(p -> name.equals(p.getName()))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    /** 直接落库一条意向（计数语义夹具：QUEUED 计入 pendingCount，IN_TRANSACTION 计入 inTransaction） */
+    private Intent newIntent(Long productId, Intent.Status status) {
+        Intent intent = new Intent();
+        intent.setProductId(productId);
+        intent.setName("测试买家");
+        intent.setPhone("13800000000");
+        intent.setStatus(status);
+        return intentRepository.save(intent);
+    }
+
+    /** 在夹具一级类别下新建一个二级类别 */
+    private Category newChild(String name) {
+        Category child = new Category();
+        child.setName(name);
+        child.setParentId(rootId);
+        return categoryRepository.save(child);
+    }
+}

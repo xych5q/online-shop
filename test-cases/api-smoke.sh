@@ -25,6 +25,8 @@
 BASE="${BASE:-http://localhost:8090}"
 SELLER_USER="${SELLER_USER:-admin}"
 SELLER_PASS="${SELLER_PASS:-seller123}"
+# 1x1 透明 PNG（多商品发布用例共用的合法图片 data URL）
+IMG='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
 
 CODE=""
 BODY=""
@@ -35,13 +37,18 @@ FAILED_IDS=""
 # ---------- 工具函数 ----------
 # 响应 body 与状态码用换行符分隔一次性取回，不落临时文件（跨平台更干净）
 call() { # call <方法> <路径> <token> <body>
-  local method="$1" path="$2" token="$3" body="$4" resp
+  local method="$1" path="$2" token="$3" body="$4" resp bodyfile=""
   local -a args=(-s --noproxy '*' -w $'\n%{http_code}' -X "$method" "$BASE$path")
   [ -n "$token" ] && args+=(-H "X-Token: $token")
   if [ -n "$body" ]; then
-    args+=(-H 'Content-Type: application/json' -d "$body")
+    # Windows Git Bash 会把中文命令行参数按 ANSI(GBK) 传给原生 curl.exe，
+    # 导致 JSON 成为非法 UTF-8；改用 UTF-8 临时文件 + -d @file 传请求体，保证中文不乱码
+    bodyfile=$(mktemp ./smoke-body.XXXXXX)
+    printf '%s' "$body" > "$bodyfile"
+    args+=(-H 'Content-Type: application/json' -d "@$bodyfile")
   fi
   resp=$(curl "${args[@]}")
+  rm -f "$bodyfile"
   CODE="${resp##*$'\n'}"
   BODY="${resp%$'\n'*}"
 }
@@ -65,16 +72,20 @@ json_str() { printf '%s' "$BODY" | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p"; }
 json_num() { printf '%s' "$BODY" | sed -n "s/.*\"$1\":\([0-9.-]\{1,\}\).*/\1/p"; }
 
 # ---------- 状态清理：把遗留商品处理掉，保证能发布新品 ----------
+# 多商品发布后可能残留多件在售/冻结商品：循环清理，直到 overview 无 detail 为止
 cleanup_state() {
-  local token="$1" pid
-  call GET /api/seller/overview "$token" ""
-  pid=$(printf '%s' "$BODY" | sed -n 's/.*"detail":{"product":{"id":\([0-9]*\).*/\1/p')
-  [ -z "$pid" ] && return 0
-  # 交易中的先标记成功；普通下架的直接下架
-  call POST "/api/seller/products/$pid/deal/result" "$token" '{"result":"success"}'
-  if [ "$CODE" != "200" ]; then
-    call POST "/api/seller/products/$pid/offshelf" "$token" ""
-  fi
+  local token="$1" pid n=0
+  while [ "$n" -lt 10 ]; do
+    call GET /api/seller/overview "$token" ""
+    pid=$(printf '%s' "$BODY" | sed -n 's/.*"detail":{"product":{"id":\([0-9]*\).*/\1/p')
+    [ -z "$pid" ] && return 0
+    # 交易中的先标记成功；普通下架的直接下架
+    call POST "/api/seller/products/$pid/deal/result" "$token" '{"result":"success"}'
+    if [ "$CODE" != "200" ]; then
+      call POST "/api/seller/products/$pid/offshelf" "$token" ""
+    fi
+    n=$((n + 1))
+  done
 }
 
 echo "=============================================================="
@@ -98,16 +109,36 @@ call GET /api/seller/overview "$TOKEN" ""
 expect TC-I04 "后台总览可读（无在售商品）" 200 '"canPublish":true'
 
 # ---------- TC-I05 ~ I08：发布与商品查询 ----------
-# 注意：负价格校验必须先于成功发布执行。单品约束（已有在售商品）的检查优先于
-# 价格校验，一旦先发布了商品，负价格用例会先被单品约束拦下，拿不到价格错误信息。
-call POST /api/seller/products "$TOKEN" '{"name":"负价格","description":"x","price":-1}'
+# 注意：负价格校验必须先于成功发布执行（多商品发布已取消「单品约束」，负价格用例只受价格校验拦截）。
+# categoryId 说明：新库启动时 MigrationRunner 会归档建类——一级「未分类」(id=1)、二级「历史商品」(id=2)。
+# 发布必须挂二级类别（A.1.2-2），故成功用例用 categoryId=2，一级类别被拒用例用 categoryId=1。
+call POST /api/seller/products "$TOKEN" '{"name":"负价格","categoryId":2,"description":"x","price":-1,"stock":5,"images":["'"$IMG"'"]}'
 expect TC-I06 "负价格发布被拒" 400 '价格必须为大于 0 的数字'
 
-call POST /api/seller/products "$TOKEN" '{"name":"冒烟测试商品","description":"接口冒烟","price":19.9}'
-expect TC-I05 "发布商品成功" 200 '"ok":true'
+call POST /api/seller/products "$TOKEN" '{"name":"冒烟测试商品","categoryId":2,"description":"<p>接口冒烟</p>","richDescription":"<b>富文本详情</b>","price":19.9,"stock":5,"images":["'"$IMG"'","'"$IMG"'"]}'
+expect TC-I05 "发布商品成功（类别/库存/双图/富文本）" 200 '"ok":true'
 
-call POST /api/seller/products "$TOKEN" '{"name":"重复发布","description":"x","price":29.9}'
-expect TC-I07 "已有在售商品再次发布被拒" 400 '已有商品在售或交易中，需先下架'
+# —— 多商品发布新增校验：类别必填 / 库存 ≥1 / 图片 1~9 张 ——
+call POST /api/seller/products "$TOKEN" '{"name":"缺类别","description":"x","price":19.9,"stock":5,"images":["'"$IMG"'"]}'
+expect TC-I07a "类别缺失被拒" 400 '商品类别必填'
+
+call POST /api/seller/products "$TOKEN" '{"name":"类别不存在","categoryId":999,"description":"x","price":19.9,"stock":5,"images":["'"$IMG"'"]}'
+expect TC-I07b "不存在的类别被拒" 400 '类别不存在'
+
+call POST /api/seller/products "$TOKEN" '{"name":"挂一级类别","categoryId":1,"description":"x","price":19.9,"stock":5,"images":["'"$IMG"'"]}'
+expect TC-I07c "挂一级类别被拒" 400 '商品必须挂到二级类别'
+
+call POST /api/seller/products "$TOKEN" '{"name":"零库存","categoryId":2,"description":"x","price":19.9,"stock":0,"images":["'"$IMG"'"]}'
+expect TC-I07d "库存为 0 被拒" 400 '库存必须大于或等于 1'
+
+call POST /api/seller/products "$TOKEN" '{"name":"负库存","categoryId":2,"description":"x","price":19.9,"stock":-3,"images":["'"$IMG"'"]}'
+expect TC-I07e "库存为负被拒" 400 '库存必须大于或等于 1'
+
+call POST /api/seller/products "$TOKEN" '{"name":"十张图","categoryId":2,"description":"x","price":19.9,"stock":5,"images":["a","b","c","d","e","f","g","h","i","j"]}'
+expect TC-I07f "图片超过 9 张被拒" 400 '图片数量必须在 1 到 9 张之间'
+
+call POST /api/seller/products "$TOKEN" '{"name":"无图","categoryId":2,"description":"x","price":19.9,"stock":5}'
+expect TC-I07g "无图片被拒" 400 '图片数量必须在 1 到 9 张之间'
 
 call GET /api/product "" ""
 expect TC-I08 "买家查询在售商品" 200 '"status":"on_sale"'
@@ -257,7 +288,7 @@ expect TC-I03b "改密后旧 token 失效" 401
 # ---------- TC-I26：手动下架 ----------
 call POST /api/seller/login "" "{\"username\":\"$SELLER_USER\",\"password\":\"$SELLER_PASS\"}"
 TOKEN=$(json_str token)
-call POST /api/seller/products "$TOKEN" '{"name":"下架测试商品","description":"x","price":9.9}'
+call POST /api/seller/products "$TOKEN" '{"name":"下架测试商品","categoryId":2,"description":"x","price":9.9,"stock":2,"images":["'"$IMG"'"]}'
 expect TC-I26 "发布第二个商品成功" 200 '"ok":true'
 PID2=$(curl -s --noproxy '*' "$BASE/api/product" | sed -n 's/.*"product":{"id":\([0-9]*\).*/\1/p')
 call POST /api/intents "" '{"name":"买家甲","phone":"13700000001"}'
@@ -266,6 +297,14 @@ call POST "/api/seller/products/$PID2/offshelf" "$TOKEN" ""
 expect TC-I26b "手动下架成功" 200 '"ok":true'
 call GET "/api/intents/lookup/$CODE_A" "" ""
 expect TC-I26c "下架后队列意向口令码全部失效" 404 '口令码无效或已失效'
+
+# ---------- TC-II01 ~ II03：多商品发布（需求迭代） ----------
+call POST /api/seller/products "$TOKEN" '{"name":"多商品A","categoryId":2,"description":"简介A","richDescription":"<b>富文本</b>","price":99.9,"stock":2,"images":["'"$IMG"'","'"$IMG"'"]}'
+expect TC-II01 "多商品A 发布成功" 200 '"ok":true'
+call POST /api/seller/products "$TOKEN" '{"name":"多商品B","categoryId":2,"description":"x","price":1.5,"stock":3,"images":["'"$IMG"'"]}'
+expect TC-II02 "多商品B 发布成功（多商品并存）" 200 '"ok":true'
+call GET /api/product "" ""
+expect TC-II03 "买家端可见在售商品（含类别/库存/富文本/图片列表）" 200 '"categoryId":2'
 
 # ---------- 汇总 ----------
 echo "=============================================================="

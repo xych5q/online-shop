@@ -1,14 +1,19 @@
 package com.group1.onlineshop.service;
 
+import com.group1.onlineshop.entity.Buyer;
 import com.group1.onlineshop.entity.Intent;
 import com.group1.onlineshop.entity.Product;
+import com.group1.onlineshop.entity.ProductImage;
 import com.group1.onlineshop.entity.Seller;
 import com.group1.onlineshop.exception.BizException;
+import com.group1.onlineshop.repository.BuyerRepository;
 import com.group1.onlineshop.repository.IntentRepository;
+import com.group1.onlineshop.repository.ProductImageRepository;
 import com.group1.onlineshop.repository.ProductRepository;
 import com.group1.onlineshop.repository.SellerRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -32,6 +37,8 @@ public class SellerService {
     private final SellerRepository sellerRepository;
     private final ProductRepository productRepository;
     private final IntentRepository intentRepository;
+    private final ProductImageRepository productImageRepository;
+    private final BuyerRepository buyerRepository;
 
     /** BCrypt 编码器：登录校验与修改密码后重新编码（BCrypt 自带随机盐） */
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -101,12 +108,14 @@ public class SellerService {
      * 业务规则：detail 为当前活跃（在售或冻结）商品及其队列/当前交易/待处置失败意向，无活跃商品时 detail 为 null；
      * queue 按提交时间正序并带 position（从 1 开始）；
      * currentDeal 与 pendingFailed 均不含口令码 code；
-     * canPublish 为 true 表示当前无在售/交易中商品（可发布新品）。
+     * canPublish 为 true 表示当前无在售/交易中商品，或当前商品仅处于售罄态（多商品发布始终允许发布新品）。
      */
     public Map<String, Object> overview(String token) {
         requireAuth(token);
+        // 售罄商品属于「当前商品」（评审意见）：仍显示在后台当前商品卡片，标「已售罄」并给补货入口（A.1.3-5）
         Product product = productRepository
-                .findFirstByStatusInOrderByCreatedAtAsc(List.of(Product.Status.ON_SALE, Product.Status.FROZEN))
+                .findFirstByStatusInOrderByCreatedAtAsc(
+                        List.of(Product.Status.ON_SALE, Product.Status.FROZEN, Product.Status.SOLD_OUT))
                 .orElse(null);
 
         Map<String, Object> detail = null;
@@ -148,8 +157,87 @@ public class SellerService {
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("detail", detail);
-        result.put("canPublish", detail == null);
+        // 多商品发布（A.1.1-1）：发布新品始终被允许，canPublish 恒为 true（评审整改三）
+        result.put("canPublish", true);
         return result;
+    }
+
+    /**
+     * 商品列表（卖家后台管理主入口，评审整改一）。
+     * 规则：需卖家鉴权；status 取值 all / on_sale / frozen / off_shelf / sold_out（默认 all），
+     * 非法值 400「参数错误」；按创建时间倒序；page 从 1 起、每页 size 条（默认 10），越界取最后一页；
+     * 每项含 {id,name,status,stock,price,categoryId,description,frozenBy,imageUrl,images,pendingCount,inTransaction,createdAt}，
+     * 出参另有 {ok,page,pageSize,totalPages,total}——
+     * imageUrl 为主图（sortOrder 最小），images 为全部图片（同序，第一条即主图），与买家侧详情页出参同名同序；
+     * pendingCount 为该商品排队中意向数，inTransaction 为该商品是否存在进行中交易；
+     * frozenBy 仅在冻结态有值（auto 交易中 / manual 手动停售），其余为 null；
+     * 售罄商品从 status=sold_out 筛进来管理（补货入口），历史接口保持「只收手动下架」语义不动。
+     */
+    public Map<String, Object> products(String token, String status, Integer page, Integer size) {
+        requireAuth(token);
+        Product.Status filter = parseStatus(status);
+        int pageSize = size == null || size < 1 ? historyPageSize : Math.min(size, 100);
+        long total = filter == null ? productRepository.count() : productRepository.countByStatus(filter);
+        int totalPages = (int) Math.max(1, (total + pageSize - 1) / pageSize);
+        int cur = Math.min(Math.max(1, page == null ? 1 : page), totalPages);
+        // 双键排序（评审整改）：createdAt 倒序 + id 倒序兜底，同一秒创建的多件商品翻页不重不漏
+        Pageable pageable = PageRequest.of(cur - 1, pageSize,
+                Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "id")));
+
+        List<Map<String, Object>> items = new ArrayList<>();
+        Page<Product> pageData = filter == null
+                ? productRepository.findAll(pageable)
+                : productRepository.findByStatus(filter, pageable);
+        for (Product p : pageData) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", p.getId());
+            m.put("name", p.getName());
+            m.put("status", p.getStatus().name().toLowerCase());
+            m.put("stock", p.getStock());
+            m.put("price", p.getPrice());
+            m.put("categoryId", p.getCategoryId());
+            m.put("description", p.getDescription());
+            m.put("frozenBy", p.getFrozenBy());
+            m.put("imageUrl", mainImageUrl(p));
+            m.put("images", productImageRepository.findByProductIdOrderBySortOrderAscIdAsc(p.getId()).stream()
+                    .map(img -> "/uploads/" + img.getFilename())
+                    .toList());
+            m.put("pendingCount", intentRepository.countByProductIdAndStatus(p.getId(), Intent.Status.QUEUED));
+            m.put("inTransaction", intentRepository
+                    .findByProductIdAndStatus(p.getId(), Intent.Status.IN_TRANSACTION).isPresent());
+            m.put("createdAt", p.getCreatedAt());
+            items.add(m);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", true);
+        result.put("page", cur);
+        result.put("pageSize", pageSize);
+        result.put("totalPages", totalPages);
+        result.put("total", total);
+        result.put("items", items);
+        return result;
+    }
+
+    /** 主图 = sortOrder 最小的一张；无图时用旧单图字段 image；都没有则返回 null（前端显示占位图，与 CatalogService 同口径） */
+    private String mainImageUrl(Product p) {
+        return productImageRepository.findFirstByProductIdOrderBySortOrderAscIdAsc(p.getId())
+                .map(ProductImage::getFilename)
+                .or(() -> java.util.Optional.ofNullable(p.getImage()))
+                .map(name -> "/uploads/" + name)
+                .orElse(null);
+    }
+
+    /** 状态筛选参数解析：all → null（不过滤）；非法值抛 400「参数错误」 */
+    private Product.Status parseStatus(String status) {
+        if (status == null || status.isBlank() || "all".equalsIgnoreCase(status.trim())) {
+            return null;
+        }
+        try {
+            return Product.Status.valueOf(status.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new BizException("参数错误");
+        }
     }
 
     /**
@@ -224,6 +312,109 @@ public class SellerService {
         return result;
     }
 
+    /**
+     * 客户列表（卖家后台）。
+     * 规则：需卖家鉴权；返回全部已注册买家，按注册时间倒序；
+     * 只返回 {id,username,phone,defaultLocation,createdAt}——绝不返回 passwordHash 与登录 token（隐私）。
+     */
+    public Map<String, Object> customers(String token) {
+        requireAuth(token);
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (Buyer b : buyerRepository.findAllByOrderByCreatedAtDesc(Pageable.unpaged())) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", b.getId());
+            m.put("username", b.getUsername());
+            m.put("phone", b.getPhone());
+            m.put("defaultLocation", b.getDefaultLocation());
+            m.put("createdAt", b.getCreatedAt());
+            items.add(m);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", true);
+        result.put("total", items.size());
+        result.put("items", items);
+        return result;
+    }
+
+    /**
+     * 购买历史 · 维度一：按客户看。
+     * 规则：需卖家鉴权；客户不存在 404「客户不存在」；返回该买家的全部意向历史
+     * （排除归档 ARCHIVED），按提交时间倒序、每页 10 条、page 从 1 开始；
+     * 每条含 {id,productId,productName,status,submittedAt,dealtAt}，绝不包含口令码。
+     */
+    public Map<String, Object> customerHistory(String token, long buyerId, Integer page) {
+        requireAuth(token);
+        if (!buyerRepository.existsById(buyerId)) {
+            throw new BizException("客户不存在", 404);
+        }
+        long total = intentRepository.countByBuyerIdAndStatusNot(buyerId, Intent.Status.ARCHIVED);
+        int totalPages = (int) Math.max(1, (total + historyPageSize - 1) / historyPageSize);
+        int cur = Math.min(Math.max(1, page == null ? 1 : page), totalPages);
+        Pageable pageable = PageRequest.of(cur - 1, historyPageSize);
+
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (Intent it : intentRepository.findByBuyerIdAndStatusNotOrderBySubmittedAtDescIdDesc(
+                buyerId, Intent.Status.ARCHIVED, pageable)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", it.getId());
+            m.put("productId", it.getProductId());
+            m.put("productName", productRepository.findById(it.getProductId())
+                    .map(Product::getName).orElse(null));
+            m.put("status", it.getStatus().name().toLowerCase());
+            m.put("submittedAt", it.getSubmittedAt());
+            m.put("dealtAt", it.getDealtAt());
+            items.add(m);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", true);
+        result.put("page", cur);
+        result.put("totalPages", totalPages);
+        result.put("total", total);
+        result.put("items", items);
+        return result;
+    }
+
+    /**
+     * 购买历史 · 维度二：按商品看意向购买人。
+     * 规则：需卖家鉴权；商品不存在 404「商品不存在」；返回该商品的全部意向（含已下架商品的历史意向），
+     * 按提交时间正序；每条含 {id,buyerId,username,phone,status,position,submittedAt,dealtAt}——
+     * position 仅对排队中（QUEUED）意向计算（从 1 起）；绝不包含口令码。
+     */
+    public Map<String, Object> productIntents(String token, long productId) {
+        requireAuth(token);
+        if (!productRepository.existsById(productId)) {
+            throw new BizException("商品不存在", 404);
+        }
+        List<Map<String, Object>> items = new ArrayList<>();
+        int queued = 0;
+        for (Intent it : intentRepository.findByProductIdOrderBySubmittedAtAsc(productId)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", it.getId());
+            m.put("buyerId", it.getBuyerId());
+            Buyer buyer = it.getBuyerId() == null ? null : buyerRepository.findById(it.getBuyerId()).orElse(null);
+            m.put("username", buyer == null ? null : buyer.getUsername());
+            m.put("phone", it.getPhone() == null ? (buyer == null ? null : buyer.getPhone()) : it.getPhone());
+            m.put("status", it.getStatus().name().toLowerCase());
+            // 处置标记（评审整改）：前端用它区分「待处置」与「已作废」的失败意向
+            m.put("disposed", it.isDisposed());
+            if (it.getStatus() == Intent.Status.QUEUED) {
+                queued++;
+                m.put("position", queued);
+            } else {
+                m.put("position", null);
+            }
+            m.put("submittedAt", it.getSubmittedAt());
+            m.put("dealtAt", it.getDealtAt());
+            items.add(m);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", true);
+        result.put("total", items.size());
+        result.put("items", items);
+        return result;
+    }
+
     /** 生成 48 位十六进制随机 token（对应原型的 24 字节随机数转 hex） */
     private String newToken() {
         byte[] bytes = new byte[24];
@@ -245,14 +436,19 @@ public class SellerService {
         return m;
     }
 
-    /** 商品对外展示字段（与买家侧 /api/product 保持一致） */
+    /** 商品对外展示字段（与买家侧 /api/product 保持一致，多商品迭代后增加类别/库存/富文本/图片列表） */
     private Map<String, Object> publicProduct(Product p) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", p.getId());
         m.put("name", p.getName());
+        m.put("categoryId", p.getCategoryId());
         m.put("description", p.getDescription());
+        m.put("richDescription", p.getRichDescription());
         m.put("price", p.getPrice());
+        m.put("stock", p.getStock());
         m.put("imageUrl", p.getImage() == null ? null : "/uploads/" + p.getImage());
+        m.put("imageUrls", productImageRepository.findByProductIdOrderBySortOrderAscIdAsc(p.getId())
+                .stream().map(pi -> "/uploads/" + pi.getFilename()).toList());
         m.put("status", p.getStatus().name().toLowerCase());
         m.put("publishedAt", p.getCreatedAt());
         return m;
