@@ -1,20 +1,26 @@
 # 测试专用配置：覆盖 src/main/resources/application.yml。
 #
-# 目的：仓库原有的测试直接继承主配置的 jdbc:h2:file:./data/onlineshop，
-# 而各测试类的 @BeforeEach 会 deleteAll() 清库，导致本地跑一次 mvn test
-# 就把开发库里的演示数据清空、并留下「测试分类」等造数（2026-11-03 实测）。
-# 本文件把测试库切到内存库，测试与开发数据彻底隔离。
+# 迭代 3（J3-0）口径：单测不再保留 H2 内存库，测试库一并切到 MySQL。
+# 用独立的 onlineshop_test 库 + create-drop，保证与开发库 onlineshop 数据彻底隔离：
+# 各测试类的 @BeforeEach 会 deleteAll() 清库，若指向开发库会把演示数据清空。
+#
+# 前置：本机 MySQL 已启动（或 DB_URL 指向可达实例），账号需有建库权限。
+#   createDatabaseIfNotExist=true 让首次 mvn test 自动建库，无需手工 CREATE DATABASE
+# 密码通过环境变量传入，与主配置同一口径：
+#   setx DB_PASSWORD "你的密码"      # 配置一次，重开终端生效
+#   DB_PASSWORD='xxx' mvn test      # 或临时传入
 #
 # 注意：Spring Boot 会以本文件完整覆盖主配置，主配置中用到的键必须在此重复声明。
 
 spring:
   datasource:
-    url: jdbc:h2:mem:onlineshop-test;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-    username: sa
-    password:
-    driver-class-name: org.h2.Driver
+    url: ${TEST_DB_URL:jdbc:mysql://localhost:3306/onlineshop_test?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true}
+    username: ${DB_USER:root}
+    password: ${DB_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
+      # 测试库每次运行重建表结构，跑完自动 drop，不残留造数
       ddl-auto: create-drop
     show-sql: false
     open-in-view: false
@@ -22,9 +28,6 @@ spring:
     multipart:
       max-file-size: 5MB
       max-request-size: 10MB
-  h2:
-    console:
-      enabled: false
 
 app:
   seller:
