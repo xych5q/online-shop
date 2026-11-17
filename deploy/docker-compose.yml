@@ -1,29 +1,70 @@
 # ============================================================================
 # 在线购物系统 · 容器编排（单机部署）
 # 用法（在仓库根目录执行）：
-#   docker compose -f deploy/docker-compose.yml up -d      # 启动
+#   docker compose -f deploy/docker-compose.yml up -d      # 启动（app + mysql）
 #   docker compose -f deploy/docker-compose.yml logs -f    # 看日志
 #   docker compose -f deploy/docker-compose.yml down       # 停止并移除容器
 #   docker compose -f deploy/docker-compose.yml down -v    # 连数据卷一起删（重置数据）
+#
+# 迭代 3（J3-0）：数据库由 H2 文件库改为独立的 MySQL 服务容器。
+#   - app 通过服务名 mysql:3306 连库，走 compose 内部网络，与宿主机 MySQL 无关
+#   - 宿主机只映射 3307，避免与本机已装的 MySQL（3306）抢端口；
+#     需要看容器内数据时用 Navicat 连 localhost:3307，账号 shop / shop_pwd
+#   - 首次启动自动建库 onlineshop 并建表，无需手工执行 SQL
 # ============================================================================
 
 services:
+  mysql:
+    image: mysql:8.0
+    container_name: online-shop-mysql
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_ROOT_PASSWORD: root_pwd
+      MYSQL_DATABASE: onlineshop
+      MYSQL_USER: shop
+      MYSQL_PASSWORD: shop_pwd
+    # 建库与连接一律走 utf8mb4，否则中文商品名会变问号或插入报 1366
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    ports:
+      # 宿主机 3307 -> 容器 3306，避开本机已有 MySQL
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      # app 必须等 mysqld 真正可接受连接再启动，否则 Spring 首次连接会失败退出
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot_pwd"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
   online-shop:
     image: online-shop:0.2
     container_name: online-shop
     build:
       context: ..            # 构建上下文必须是仓库根目录
       dockerfile: deploy/Dockerfile
+    depends_on:
+      mysql:
+        condition: service_healthy
     ports:
       - "8080:8080"
     environment:
       TZ: Asia/Shanghai
       # 容器内路径；持久化靠下面的 named volume
       JAVA_OPTS: ""
+      # 连 compose 内的 mysql 服务名，不连宿主机
+      DB_URL: jdbc:mysql://mysql:3306/onlineshop?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true
+      DB_USER: shop
+      DB_PASSWORD: shop_pwd
     volumes:
-      # H2 文件库 + 上传目录都落在 /app/data 下，挂卷后容器重启数据不丢
+      # 上传图片落在 /app/data/uploads，挂卷后容器重启不丢
       - shop-data:/app/data
     restart: unless-stopped
 
 volumes:
   shop-data:
+  mysql-data:
