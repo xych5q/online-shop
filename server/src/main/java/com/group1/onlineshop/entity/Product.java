@@ -7,32 +7,32 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
- * 商品。挑战需求 A 升级后状态机为 <b>4 态</b>：在售 / 已冻结 / 已下架 / 售罄。
+ * 商品。挑战需求 B 升级后状态机为 <b>2 态</b>：在售 / 已下架。
  *
- * <p><b>状态转移与触发条件</b>（老师第 1 次点评技术意见 1、3、5）：
+ * <p><b>状态转移与触发条件</b>（SRS 4.1 商品状态机、FR-S4）：
  * <pre>
- * ON_SALE        --[存在排队中意向且商品在售 → 队首自动进入交易，交易服务同一事务内改状态]-->  FROZEN(auto)
- * ON_SALE        --[卖家手动冻结]------------------------------------------------------>  FROZEN(manual)
- * FROZEN(manual) --[卖家手动解冻]------------------------------------------------------>  ON_SALE
- * FROZEN(auto)   --[卖家标记交易结果 result=SUCCESS]------------------------------------>  OFF_SHELF(DEAL_SUCCESS)
- * FROZEN(auto)   --[卖家标记 result=FAILURE 且队列为空]（回退）-------------------------->  ON_SALE
- * ON_SALE        --[库存扣减后 stock == 0]--------------------------------------------->  SOLD_OUT
- * SOLD_OUT       --[卖家手动补库存且 stock ≥ 1]（回退，A.1.3-5）------------------------->  ON_SALE
+ * ON_SALE   --[下单扣减后库存归零，售罄自动下架，offShelfReason=SOLD_OUT]-->  OFF_SHELF
+ * ON_SALE   --[卖家手动下架，offShelfReason=MANUAL]------------------------>  OFF_SHELF
+ * OFF_SHELF --[卖家补货或调整库存，且库存≥1]--------------------------------->  ON_SALE
+ * OFF_SHELF --[订单取消回补后按最终库存判断，仅售罄自动下架的恢复]---------->  ON_SALE
  * </pre>
+ *
+ * <p><b>与迭代 2 的差异（废止能力登记）</b>：迭代 2 曾为 4 态（在售/冻结/已下架/售罄）。
+ * 本次按 SRS FR-S4「商品只有在售与已下架两态，不提供冻结与解冻」及状态机 v3，
+ * 删除 {@code FROZEN}、{@code SOLD_OUT} 两个枚举值与冻结字段 {@code frozenBy}、{@code frozenAt}；
+ * 冻结 / 解冻 / 自动冻结 / 售罄独立态整套机制废止。售罄不再单独成态，改为「已下架」+
+ * {@code offShelfReason=SOLD_OUT} 表达；因此 {@code offShelfReason} 保留，供取消回补时
+ * 区分「售罄自动下架（可恢复）」与「卖家手动下架（不恢复）」。{@code closedAt} 作为下架时间保留。
  *
  * <p>需求依据：
  * <ul>
- *   <li>A.1.1-1 可同时发布多个商品，多件在售、多笔交易并行（基线「一次只能卖一件」作废）</li>
- *   <li>A.1.1-3 发布后名称/描述/图片/价格/类别<b>无修改入口</b>，<b>仅库存可手动调</b>，商品<b>可改挂类别</b></li>
- *   <li>A.1.2-2 必挂二级类别，故增加 categoryId</li>
- *   <li>A.1.3-1 库存发布时要求 ≥1</li>
- *   <li>A.1.5-1 / A.1.5-4 富文本描述（可内嵌图片与视频），描述可为空</li>
+ *   <li>FR-S4 商品两态与上下架，不提供冻结与解冻</li>
+ *   <li>FR-C4 库存归零自动下架、补货可重新上架、下架不牵连进行中订单</li>
+ *   <li>FR-S8 历史商品按最后成交时间倒序</li>
  * </ul>
  *
- * <p><b>兼容性说明</b>：本次为增量修改，<b>原有字段一个未删</b>。
- * 新增的 stock / categoryId 设为<b>可空</b>，原因是 H2 使用 {@code ddl-auto: update}，
- * 只加列不回填数据；对已有商品行加 NOT NULL 会导致旧库启动失败。
- * 必填约束改由应用层在发布商品时校验（stock ≥ 1、categoryId 非空）。
+ * <p><b>兼容性</b>：沿用迭代 2 表结构，{@code stock} / {@code categoryId} 保持可空，
+ * 由应用层校验必填，保证在旧库上原地启动。
  */
 @Data
 @Entity
@@ -42,12 +42,8 @@ public class Product {
     public enum Status {
         /** 在售 */
         ON_SALE,
-        /** 已冻结（手动或交易中） */
-        FROZEN,
-        /** 已下架（进历史） */
-        OFF_SHELF,
-        /** 售罄：库存归零自动触发（A.1.3）；补库存可回到在售（A.1.3-5） */
-        SOLD_OUT
+        /** 已下架（进历史；售罄与手动下架均为此态，以 offShelfReason 区分） */
+        OFF_SHELF
     }
 
     @Id
@@ -57,56 +53,42 @@ public class Product {
     @Column(nullable = false, length = 100)
     private String name;
 
-    /** 简要描述（沿用） */
+    /** 简要描述（发布后不可改） */
     @Column(length = 2000)
     private String description;
 
-    /**
-     * 富文本描述（A.1.5-1）：可内嵌图片与视频，允许为空（A.1.5-4）。
-     * 长度上限按 HTML 片段估算取 8000。
-     */
+    /** 富文本描述（可内嵌图片与视频，允许为空，发布后不可改） */
     @Column(length = 8000)
     private String richDescription;
 
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal price;
 
-    /**
-     * 库存数量（A.1.3）。发布时要求 ≥1，由应用层校验。
-     * <b>可空</b>：为兼容已有数据，旧商品由迁移脚本回填为 1。
-     */
+    /** 库存数量。发布时要求 ≥1，由应用层校验；为兼容旧数据保持可空 */
     @Column
     private Integer stock;
 
-    /**
-     * 所属二级类别 id（A.1.2-2 必填）。<b>可空</b>：为兼容已有数据，
-     * 旧商品由迁移脚本挂到「未分类 / 历史商品」下。必填由应用层校验。
-     */
+    /** 所属二级类别 id。必填由应用层校验；为兼容旧数据保持可空 */
     @Column
     private Long categoryId;
 
-    /** 图片文件名，存于 app.upload.dir；为空时前端显示占位图（旧单图字段，保留不动） */
+    /** 图片文件名，旧单图字段保留不动 */
     private String image;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Status status = Status.ON_SALE;
 
-    /** 下架原因：SOLD_OUT（售罄）/ DEAL_SUCCESS（交易成功）/ MANUAL（卖家手动）。便于历史区分（点评技术意见 4） */
+    /** 下架原因：SOLD_OUT（售罄自动下架）/ MANUAL（卖家手动下架）。取消回补据此判断是否恢复在售 */
     @Column(length = 20)
     private String offShelfReason;
 
     @Column(nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
-    /** 最后修改时间（改挂类别/调库存/上下架等操作时由 Hibernate 自动刷新） */
+    /** 最后修改时间（调库存 / 改挂类别 / 上下架时由 Hibernate 自动刷新） */
     @UpdateTimestamp
     private LocalDateTime updatedAt;
-
-    private LocalDateTime frozenAt;
-
-    /** manual = 卖家手动冻结；auto = 进入交易自动冻结 */
-    private String frozenBy;
 
     /** 下架时间（进入历史的时间） */
     private LocalDateTime closedAt;

@@ -21,6 +21,11 @@ import java.time.LocalDateTime;
  *
  * <p>注意：注册登录是 A 覆盖基线的核心变更（C5 裁决）——基线「免注册 + 口令码」
  * 整条作废，提交购买意向必须处于登录态（A.2.1-1 / A.2.1-2）。
+ *
+ * <p><b>挑战需求 B 的历史字段改造</b>：买家的「我的订单与历史」（FR-D4）由迭代 2 的
+ * 按 {@code Intent.buyerId} 查意向，改为按 {@code Order.buyerId} 查订单——本实体字段不变，
+ * 变化落在查询关联（订单仓储 {@code OrderRepository.findAllByBuyerIdOrderByCreatedAtDesc}）。
+ * 历史展示「状态或最终结果」，最终结果仅交易完成/已取消，由 Order.status 推导。
  */
 @Data
 @Entity
