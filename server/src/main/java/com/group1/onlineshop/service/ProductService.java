@@ -17,6 +17,8 @@ import com.group1.onlineshop.repository.StockLogRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -42,6 +44,12 @@ import java.util.regex.Pattern;
  * 售罄不再单独成态，改为「已下架 + {@code offShelfReason=SOLD_OUT}」表达（FR-C4）。
  * 需求依据：FR-S4（两态）、FR-C4（库存归零自动下架、补货可恢复在售）。
  * 发布接口按「多商品发布」需求实现（类别/库存/多图/富文本描述，见 publish 方法注释）。
+ *
+ * <p><b>迭代 3 · L3-2 库存耦合</b>：本服务对订单域只暴露三个原子方法——
+ * {@link #deductStock}（按件扣减）、{@link #restoreStock}（按件回补）、
+ * {@link #refreshSaleStatusAfterRestore}（回补后统一判一次是否恢复在售）。
+ * 三者均为 {@code Propagation.MANDATORY}：<b>不开事务</b>，事务归属订单域（G16 组内裁定），
+ * 保证「订单状态变更 + 库存动作」同成同败。
  */
 @Service
 @RequiredArgsConstructor
@@ -314,6 +322,111 @@ public class ProductService {
         result.put("status", product.getStatus().name().toLowerCase());
         result.put("updatedAt", product.getUpdatedAt());
         return result;
+    }
+
+    /* ==================== L3-2 库存扣减与回补（订单域耦合，G16） ==================== */
+
+    /**
+     * 按件扣减库存（供订单域调用，L3-2 / SRS FR-D7）。
+     *
+     * <p><b>事务边界（G16 组内裁定）</b>：本方法只做「改库存 + 写流水」，<b>不自行开启事务</b>——
+     * {@code Propagation.MANDATORY} 要求调用方（订单域 OrderService）必须已在事务中；
+     * 扣减与订单状态变更同属一个事务，任一步失败整单回滚，避免双扣或部分扣减。
+     *
+     * <p>业务规则：
+     * <ul>
+     *   <li>数量必须 &gt; 0，否则 400「数量必须大于 0」</li>
+     *   <li>悲观锁读取商品行（并发下单串行化）；库存不足 → 400「库存不足」，不写流水、不改库存</li>
+     *   <li>扣减后库存归零 → 自动下架：OFF_SHELF + offShelfReason=SOLD_OUT + closedAt=now（FR-C4）</li>
+     *   <li>写一条库存流水：reason=「成交扣减」、operator=SYSTEM、changeAmount=-quantity，
+     *       维持 ΣchangeAmount = 当前库存</li>
+     * </ul>
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void deductStock(long productId, int quantity) {
+        if (quantity <= 0) {
+            throw new BizException("数量必须大于 0");
+        }
+        Product product = productRepository.lockById(productId)
+                .orElseThrow(() -> new BizException("商品不存在", 404));
+
+        int before = product.getStock() == null ? 0 : product.getStock();
+        if (before < quantity) {
+            throw new BizException("库存不足");
+        }
+        int after = before - quantity;
+        product.setStock(after);
+        if (after == 0) {
+            // 库存归零自动下架（FR-C4），补货后可恢复在售
+            product.setStatus(Product.Status.OFF_SHELF);
+            product.setOffShelfReason("SOLD_OUT");
+            product.setClosedAt(LocalDateTime.now());
+        }
+        productRepository.save(product);
+        writeStockLog(product.getId(), before, after, -quantity, "成交扣减", "SYSTEM");
+    }
+
+    /**
+     * 按件回补库存（供订单取消调用，L3-2 / SRS FR-D7）。
+     *
+     * <p><b>事务边界</b>：与 {@link #deductStock(long, int)} 相同，MANDATORY，
+     * 由订单域把「订单置已取消 + 库存回补」放在同一事务内。
+     *
+     * <p>业务规则：
+     * <ul>
+     *   <li>数量必须 &gt; 0，否则 400「数量必须大于 0」</li>
+     *   <li>写一条库存流水：reason=「取消回补」、operator=SYSTEM、changeAmount=+quantity</li>
+     *   <li><b>本方法不改商品状态</b>——组会裁定 G7：N 笔回补全部完成后，
+     *       由调用方统一调用 {@link #refreshSaleStatusAfterRestore(long)} 判断一次，
+     *       避免逐笔判断把「手动下架」的商品误恢复为在售</li>
+     * </ul>
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void restoreStock(long productId, int quantity) {
+        if (quantity <= 0) {
+            throw new BizException("数量必须大于 0");
+        }
+        Product product = productRepository.lockById(productId)
+                .orElseThrow(() -> new BizException("商品不存在", 404));
+
+        int before = product.getStock() == null ? 0 : product.getStock();
+        int after = before + quantity;
+        product.setStock(after);
+        productRepository.save(product);
+        writeStockLog(product.getId(), before, after, quantity, "取消回补", "SYSTEM");
+    }
+
+    /**
+     * 回补完成后的在售状态刷新（G7 组内裁定）。
+     *
+     * <p>只在「已下架 + offShelfReason=SOLD_OUT + 库存 ≥1」时恢复在售并清空下架痕迹；
+     * 卖家手动下架（MANUAL）一律不恢复。由订单域在全部回补结束后按商品调用一次。
+     *
+     * <p>事务边界：MANDATORY，与回补同事务，不单独提交。
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void refreshSaleStatusAfterRestore(long productId) {
+        Product product = productRepository.lockById(productId)
+                .orElseThrow(() -> new BizException("商品不存在", 404));
+        int stock = product.getStock() == null ? 0 : product.getStock();
+        if (isSoldOutOffShelf(product) && stock >= 1) {
+            product.setStatus(Product.Status.ON_SALE);
+            product.setOffShelfReason(null);
+            product.setClosedAt(null);
+            productRepository.save(product);
+        }
+    }
+
+    /** 库存流水落库（成交扣减 / 取消回补共用；reason 与 operator 由调用场景决定） */
+    private void writeStockLog(long productId, int before, int after, int change, String reason, String operator) {
+        StockLog log = new StockLog();
+        log.setProductId(productId);
+        log.setOperator(operator);
+        log.setBeforeStock(before);
+        log.setAfterStock(after);
+        log.setChangeAmount(change);
+        log.setReason(reason);
+        stockLogRepository.save(log);
     }
 
     /**
