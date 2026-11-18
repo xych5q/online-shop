@@ -23,6 +23,10 @@ import java.time.LocalDateTime;
  *
  * <p>不建数据库外键（沿用本项目 id 引用风格）：{@code buyerId} 指向 Buyer，有效性由应用层保证。
  * 价格不设快照（FR-C11）：商品发布后价格不可改，明细显示商品当前价格，故订单不冗余单价。
+ *
+ * <p><b>时间字段（P1，C3-2）</b>：订单只记 {@code createdAt} 一个时间字段，各状态变更时间不落库，
+ * 审计走 P2 日志。原 {@code updatedAt}（状态推进时间）与 {@code cancelledAt}（取消时间）已按
+ * 2026-11-18 状态机 v3 的 P1 口径删除；取消与推进时间如需追溯从 P2 操作日志取，不在订单表冗余。
  */
 @Data
 @Entity
@@ -68,13 +72,7 @@ public class Order {
     @Column(nullable = false)
     private Status status = Status.PLACED;
 
-    /** 下单时间；买家历史与卖家订单列表按此倒序（FR-D4、FR-S5） */
+    /** 下单时间；买家历史与卖家订单列表按此倒序（FR-D4、FR-S5）。P1：订单唯一时间字段 */
     @Column(nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
-
-    /** 状态最后一次推进的时间 */
-    private LocalDateTime updatedAt;
-
-    /** 取消时间；已取消订单保留在历史中，不删除（FR-D4、G4） */
-    private LocalDateTime cancelledAt;
 }
