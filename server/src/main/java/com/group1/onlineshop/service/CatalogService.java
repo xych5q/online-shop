@@ -45,12 +45,11 @@ public class CatalogService {
     private static final int MAX_PAGE_SIZE = 50;
 
     /**
-     * 买家可见状态：在售 + 交易中。
-     * 售罄（SOLD_OUT）按 FR-C4 属「库存归零自动下架」，与已下架（OFF_SHELF）一样不进浏览列表；
-     * 若后续裁定「售罄商品仍可浏览」，在此常量中加入 Product.Status.SOLD_OUT 即可。
+     * 买家可见状态：只有在售（L3-1 两态改造后商品只有在售 / 已下架两态，SRS FR-S4）。
+     * 售罄按 FR-C4 属「库存归零自动下架」，以 OFF_SHELF + offShelfReason=SOLD_OUT 表达，不进浏览列表。
      */
     private static final List<Product.Status> VISIBLE =
-            List.of(Product.Status.ON_SALE, Product.Status.FROZEN);
+            List.of(Product.Status.ON_SALE);
 
     private final ProductRepository productRepository;
     private final CategoryRepository categoryRepository;
@@ -158,18 +157,13 @@ public class CatalogService {
     /**
      * 动态条件：买家可见 + 每个关键词都要命中名称或描述（AND）+ 类别集合。
      *
-     * <p>裁决 C11：买家列表只展示「在售」与「交易中」（FROZEN 且 frozenBy='auto'）；
-     * 卖家手动停售（FROZEN 且 frozenBy='manual'）不出现。此前按 status 过滤会把 manual
-     * 冻结商品一并算进 total，列表页就会出现「共 N 条」与实际卡片数不符，分页还可能翻出半页。
+     * <p>两态改造（L3-1，SRS FR-S4）：买家列表只展示「在售」商品；
+     * 冻结机制整体废止，已下架（含售罄自动下架）一律不进浏览列表。
      */
     private Specification<Product> spec(List<String> terms, Set<Long> categoryIds) {
         return (root, query, cb) -> {
             List<Predicate> ps = new ArrayList<>();
-            ps.add(cb.or(
-                    cb.equal(root.get("status"), Product.Status.ON_SALE),
-                    cb.and(
-                            cb.equal(root.get("status"), Product.Status.FROZEN),
-                            cb.equal(root.get("frozenBy"), "auto"))));
+            ps.add(cb.equal(root.get("status"), Product.Status.ON_SALE));
             for (String term : terms) {
                 String like = "%" + term.toLowerCase() + "%";
                 ps.add(cb.or(
@@ -191,8 +185,7 @@ public class CatalogService {
         m.put("price", p.getPrice());
         m.put("imageUrl", mainImageUrl(p));
         m.put("status", p.getStatus().name().toLowerCase());
-        // 裁决 C11：买家端要区分两类冻结文案——auto=交易中（仍可提交意向）、manual=卖家停售（不可提交）
-        m.put("frozenBy", p.getStatus() == Product.Status.FROZEN ? p.getFrozenBy() : null);
+        // 两态改造（L3-1）：frozenBy 出参删除，买家侧只按在售 / 已下架区分
         m.put("categoryId", p.getCategoryId());
         m.put("categoryName", p.getCategoryId() == null ? null : categoryNames.get(p.getCategoryId()));
         m.put("stock", p.getStock());

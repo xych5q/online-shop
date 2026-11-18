@@ -100,12 +100,13 @@ public class TradeService {
     @Transactional
     public boolean tryStartDeal(Product product) {
         synchronized (dealLock(product.getId())) {
-            // 悲观锁当前读：并发提交时后到者会等前者事务提交，从而读到 FROZEN，不会重复推进
+            // 悲观锁当前读：并发提交时后到者会等前者事务提交，不会重复推进
             Product locked = productRepository.lockById(product.getId())
                     .orElseThrow(() -> new BizException("商品不存在", 404));
             entityManager.refresh(locked, LockModeType.PESSIMISTIC_WRITE); // 丢弃一级缓存里的旧快照
-            if (locked.getStatus() != Product.Status.ON_SALE) {
-                return false; // 已有交易（自动冻结）或卖家手动冻结：本笔留在队列
+            // L3-1 两态改造：冻结机制废止后，用「是否已有进行中交易」判定，替代原 FROZEN 状态判定
+            if (hasActiveDeal(locked.getId())) {
+                return false; // 已有进行中的交易：本笔留在队列
             }
             List<Intent> queue = queue(locked.getId());
             if (queue.isEmpty()) {
@@ -116,14 +117,13 @@ public class TradeService {
         }
     }
 
-    /** 把队首意向置 {@code IN_TRANSACTION} 并冻结商品（调用方必须已持有该商品的 {@link #dealLock(Long)}） */
+    /**
+     * 把队首意向置 {@code IN_TRANSACTION}（调用方必须已持有该商品的 {@link #dealLock(Long)}）。
+     * L3-1 两态改造：冻结机制废止（SRS FR-S4），进入交易不再改商品状态，商品保持原状态。
+     */
     private void startDeal(Product product, Intent head) {
         head.setStatus(Intent.Status.IN_TRANSACTION);
         intentRepository.save(head);
-        product.setStatus(Product.Status.FROZEN);
-        product.setFrozenBy("auto");
-        product.setFrozenAt(LocalDateTime.now());
-        productRepository.save(product);
     }
 
     /**
@@ -205,17 +205,15 @@ public class TradeService {
             stockLogRepository.save(stockLog);
 
             if (left > 0) {
-                // T6a：成交不等于下架——商品回在售继续卖，队列不清空
+                // T6a：成交不等于下架——商品保持/恢复在售继续卖，队列不清空（两态改造后无冻结态）
                 current.setStatus(Product.Status.ON_SALE);
-                current.setFrozenBy(null);
-                current.setFrozenAt(null);
                 productRepository.save(current);
                 if (!queue(current.getId()).isEmpty()) {
                     enterDeal(current); // 队首自动进入下一笔交易
                 }
             } else {
-                // T6b：库存归零 → 售罄下架，队列未成交意向置售罄失效（I6）
-                current.setStatus(Product.Status.SOLD_OUT);
+                // T6b：库存归零 → 售罄自动下架（OFF_SHELF + SOLD_OUT），队列未成交意向置售罄失效（I6）
+                current.setStatus(Product.Status.OFF_SHELF);
                 current.setOffShelfReason("SOLD_OUT");
                 current.setClosedAt(LocalDateTime.now());
                 productRepository.save(current);
@@ -235,18 +233,13 @@ public class TradeService {
             intentRepository.save(deal);
             List<Intent> queue = queue(current.getId());
             if (!queue.isEmpty()) {
-                // T5：下一位自动递补进入交易，商品保持冻结
+                // T5：下一位自动递补进入交易（两态改造后商品始终保持原状态，无冻结可维持）
                 Intent next = queue.get(0);
                 next.setStatus(Intent.Status.IN_TRANSACTION);
                 intentRepository.save(next);
-                current.setFrozenBy("auto");
-                current.setFrozenAt(LocalDateTime.now());
-                productRepository.save(current);
             } else {
-                // T4：队列无人 → 商品自动恢复在售
+                // T4：队列无人 → 商品恢复在售
                 current.setStatus(Product.Status.ON_SALE);
-                current.setFrozenBy(null);
-                current.setFrozenAt(null);
                 productRepository.save(current);
             }
             return;
@@ -275,8 +268,8 @@ public class TradeService {
             throw new BizException("该意向无需处理");
         }
         Product product = productRepository.findById(intent.getProductId()).orElse(null);
-        if (product == null || product.getStatus() == Product.Status.OFF_SHELF
-                || product.getStatus() == Product.Status.SOLD_OUT) {
+        // 两态改造：售罄不再是独立状态（OFF_SHELF + offShelfReason=SOLD_OUT），统一按已下架拦截
+        if (product == null || product.getStatus() == Product.Status.OFF_SHELF) {
             throw new BizException("商品已下架，无法处理");
         }
         intent.setDisposed(true);

@@ -20,9 +20,13 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Map;
 
 /**
- * 卖家端控制器：19 个 /api/seller/ 接口（12 个迭代 1 接口 + 3 个后台管理接口 + 1 个客户列表 + 2 个购买历史两维度 + 1 个商品列表）。
+ * 卖家端控制器：17 个 /api/seller/ 接口（原 19 个，L3-1 两态改造删除 freeze / unfreeze 两个冻结接口）。
  * 业务规则与入参出参以 docs/design/接口设计.md 与 docs/design/接口设计-卖家后台管理.md 为准。
  * 鉴权：除 login 外，均从请求头 X-Token（或 Authorization: Bearer）取 token，校验失败抛 401「未登录或登录已失效」。
+ *
+ * <p><b>已废止端点登记</b>（L3-1，SRS FR-S4「商品只有在售与已下架两态，不提供冻结与解冻」）：
+ * {@code POST /api/seller/products/{id}/freeze} 与 {@code POST /api/seller/products/{id}/unfreeze}
+ * 随冻结机制整体删除，迭代 2 的历史契约见 tag {@code v0.2-iter2.1}。
  */
 @RestController
 @RequiredArgsConstructor
@@ -62,7 +66,7 @@ public class SellerController {
 
     /**
      * 商品列表（卖家后台管理主入口）：GET /api/seller/products?status=all&page=1&size=10。
-     * status 取 all/on_sale/frozen/off_shelf/sold_out；按创建时间倒序；page 从 1 起、每页默认 10 条；
+     * status 取 all/on_sale/off_shelf（两态改造后 frozen、sold_out 不再是合法取值）；按创建时间倒序；page 从 1 起、每页默认 10 条；
      * 每项含 {id,name,status,stock,price,pendingCount,inTransaction,createdAt}。
      * 与 POST 同路径不同方法，不冲突。
      */
@@ -88,23 +92,10 @@ public class SellerController {
         return productService.publish(body, seller.getUsername());
     }
 
-    /**
-     * 手动冻结：仅 ON_SALE 可冻结，置 status=FROZEN、frozenBy='manual'、frozenAt=now。
+    /*
+     * 已废止：POST /api/seller/products/{id}/freeze 与 /{id}/unfreeze。
+     * 依据 SRS FR-S4（商品只有两态，不提供冻结与解冻），L3-1 删除，详见类注释废止登记。
      */
-    @PostMapping("/api/seller/products/{id}/freeze")
-    public Map<String, Object> freeze(HttpServletRequest request, @PathVariable long id) {
-        requireAuth(request);
-        return productService.freeze(id);
-    }
-
-    /**
-     * 手动解冻：仅 frozenBy='manual' 可解冻，否则 400「交易中的商品不能手动解冻」（交易冻结必须先标记交易结果）。
-     */
-    @PostMapping("/api/seller/products/{id}/unfreeze")
-    public Map<String, Object> unfreeze(HttpServletRequest request, @PathVariable long id) {
-        requireAuth(request);
-        return productService.unfreeze(id);
-    }
 
     /**
      * 标记交易结果：入参 {result:"success"|"fail"}。
@@ -122,7 +113,7 @@ public class SellerController {
 
     /**
      * 手动下架：该商品队列里所有 QUEUED 意向置 FAILED 且 disposed=true，商品置 OFF_SHELF、closedAt=now；
-     * 交易冻结中的商品须先标记交易结果。
+     * 存在进行中交易（旧意向队列遗留流程）的商品须先标记交易结果。
      */
     @PostMapping("/api/seller/products/{id}/offshelf")
     public Map<String, Object> offshelf(HttpServletRequest request, @PathVariable long id) {

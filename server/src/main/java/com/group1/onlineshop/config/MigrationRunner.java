@@ -109,8 +109,9 @@ public class MigrationRunner implements CommandLineRunner {
                 p.setCategoryId(archiveChild.getId());
                 changed = true;
             }
-            // 旧系统在售 / 冻结的商品，切换后不再参与交易，统一归档为已下架
-            if (p.getStatus() == Product.Status.ON_SALE || p.getStatus() == Product.Status.FROZEN) {
+            // 旧系统在售的商品，切换后不再参与交易，统一归档为已下架
+            // （两态改造 L3-1：FROZEN 枚举已删除，历史库中的冻结行按 INACTIVE 处理不再进入本分支）
+            if (p.getStatus() == Product.Status.ON_SALE) {
                 p.setStatus(Product.Status.OFF_SHELF);
                 p.setOffShelfReason("MANUAL");
                 if (p.getClosedAt() == null) {

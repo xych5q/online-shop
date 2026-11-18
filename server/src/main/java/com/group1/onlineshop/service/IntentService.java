@@ -69,12 +69,10 @@ public class IntentService {
         }
         Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new BizException("商品不存在"));
-        if (product.getStatus() == Product.Status.OFF_SHELF || product.getStatus() == Product.Status.SOLD_OUT) {
+        // 两态改造（L3-1）：商品只有在售 / 已下架两态，售罄按 offShelfReason=SOLD_OUT 归入已下架；
+        // 冻结机制废止，原「手动冻结不接单」分支随之删除（SRS FR-S4）。
+        if (product.getStatus() == Product.Status.OFF_SHELF) {
             throw new BizException("商品已下架");
-        }
-        // 裁决 C11：两类冻结分开处理——自动冻结=交易进行中，仍可排队；手动冻结=卖家停售，不接收
-        if (product.getStatus() == Product.Status.FROZEN && !"auto".equals(product.getFrozenBy())) {
-            throw new BizException("卖家已暂停接单，暂不接收新意向");
         }
         if (product.getStock() == null || product.getStock() < 1) {
             throw new BizException("商品已售罄");
@@ -152,7 +150,7 @@ public class IntentService {
     @Transactional(readOnly = true)
     public Map<String, Object> activeProduct() {
         return productRepository
-                .findFirstByStatusInOrderByCreatedAtAsc(List.of(Product.Status.ON_SALE, Product.Status.FROZEN))
+                .findFirstByStatusInOrderByCreatedAtAsc(List.of(Product.Status.ON_SALE))
                 .map(this::publicProduct)
                 .orElse(null);
     }
