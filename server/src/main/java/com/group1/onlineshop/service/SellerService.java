@@ -165,11 +165,12 @@ public class SellerService {
      * 商品列表（卖家后台管理主入口，评审整改一）。
      * 规则：需卖家鉴权；status 取值 all / on_sale / off_shelf（默认 all），非法值 400「参数错误」；
      * 按创建时间倒序；page 从 1 起、每页 size 条（默认 10），越界取最后一页；
-     * 每项含 {id,name,status,stock,price,categoryId,description,imageUrl,images,pendingCount,inTransaction,createdAt}，
+     * 每项含 {id,name,status,stock,price,categoryId,description,imageUrl,images,pendingCount,inTransaction,offShelfReason,createdAt}，
      * 出参另有 {ok,page,pageSize,totalPages,total}——
      * imageUrl 为主图（sortOrder 最小），images 为全部图片（同序，第一条即主图），与买家侧详情页出参同名同序；
      * pendingCount 为该商品排队中意向数，inTransaction 为该商品是否存在进行中交易；
-     * 两态改造（L3-1）：frozenBy 出参删除；售罄商品以 off_shelf 状态出现在列表中（offShelfReason=SOLD_OUT 可补货）。
+     * 两态改造（L3-1）：frozenBy 出参删除；售罄商品以 off_shelf 状态出现在列表中，
+     * offShelfReason=SOLD_OUT 表示售罄自动下架（可补货恢复），MANUAL 表示卖家手动下架，在售为 null。
      */
     public Map<String, Object> products(String token, String status, Integer page, Integer size) {
         requireAuth(token);
@@ -202,6 +203,8 @@ public class SellerService {
             m.put("pendingCount", intentRepository.countByProductIdAndStatus(p.getId(), Intent.Status.QUEUED));
             m.put("inTransaction", intentRepository
                     .findByProductIdAndStatus(p.getId(), Intent.Status.IN_TRANSACTION).isPresent());
+            // 两态下售罄不独立成态：前端据 offShelfReason=SOLD_OUT 显示「售罄」徽标并给补货入口（J3-5）
+            m.put("offShelfReason", p.getStatus() == Product.Status.OFF_SHELF ? p.getOffShelfReason() : null);
             m.put("createdAt", p.getCreatedAt());
             items.add(m);
         }
