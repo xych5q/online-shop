@@ -83,6 +83,7 @@ body {
 .badge.cancelled { background: #eceff5; color: var(--text-2); }
 .badge.queued { background: #e7edfd; color: var(--primary); }
 .badge.deal { background: #fdf0dd; color: #b26a00; }
+.badge.soldout { background: #fdeaea; color: var(--danger); }
 
 /* ---------- 按钮 ---------- */
 .btn {
@@ -426,6 +427,14 @@ body {
 /* 卡片状态徽标位（裁决 C11）：仅交易中出现，在售不占位 */
 .pcard .pcard-badge { display: flex; }
 .pcard .pcard-badge .badge { font-size: 11px; padding: 2px 7px; }
+
+/* ---------- 我的收藏（J3-1 · 迭代 3） ----------
+   下架 / 售罄条目保留展示但整体置灰：可用性以后端 available 为准，不靠 status 推导 */
+.pcard.unavailable { opacity: .62; }
+.pcard.unavailable .pic img { filter: grayscale(1); }
+.pcard .fav-ops { display: flex; justify-content: flex-end; margin-top: 2px; }
+.pcard .fav-ops .link-btn { font-size: 12px; color: var(--text-2); }
+.pcard .fav-ops .link-btn:hover { color: var(--danger); }
 
 /* ---------- 我的历史（US-19） ---------- */
 #histBody .table th { padding: 10px; background: #fafbfd; }
