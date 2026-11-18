@@ -39,8 +39,11 @@
       <artifactId>spring-security-crypto</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.h2database</groupId>
-      <artifactId>h2</artifactId>
+      <groupId>com.mysql</groupId>
+      <artifactId>mysql-connector-j</artifactId>
+      <!-- 显式钉 8.4.0：兼容 MySQL 8.x/8.4 LTS；本机 Maven 缓存已有完整构件，
+           且中央仓网络不稳时不必再联网解析（Boot 3.3.4 默认管理的 8.3.0 本地缓存残缺） -->
+      <version>8.4.0</version>
       <scope>runtime</scope>
     </dependency>
     <dependency>

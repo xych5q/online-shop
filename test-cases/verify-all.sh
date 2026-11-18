@@ -8,14 +8,21 @@
 #   [4/4] 打印汇总表；任何一步失败退出码为 1，结束时关闭服务进程
 #
 # 用法（在仓库根目录执行）：
-#   bash test-cases/verify-all.sh
+#   DB_PASSWORD='你的MySQL密码' bash test-cases/verify-all.sh
+#   （已用 setx DB_PASSWORD 配置过则直接 bash test-cases/verify-all.sh）
 # 可选环境变量：
 #   PORT=8090      服务端口
 #   SKIP_UNIT=1    跳过步骤 1（只做冒烟，须先自行打包出 server/target/online-shop.jar）
+#   DB_USER        MySQL 账号，默认 root
+#   DB_PASSWORD    MySQL 密码，默认空
+#   VERIFY_DB_URL  冒烟专用库，默认 localhost:3306/shop_verify
+#
+# 前置：MySQL 已启动（迭代 3 起不再使用 H2，没有库这一步会失败）
 #
 # 纪律：
 #   - 不修改 api-smoke.sh / admin-api-demo.sh / api-smoke-iter2.sh 原件，只在入口调用
-#   - 服务数据落在 server/data-verify/，每次运行前清空，不碰开发库
+#   - 冒烟在独立库 shop_verify 上跑，每次用 ddl-auto=create 重建表，不碰开发库 onlineshop
+#   - 上传文件落在 server/data-verify/，每次运行前清空
 #   - 验收现场一条命令复现；嵇宇锋 J-5 录屏统一用本入口
 # ============================================================================
 set -u
@@ -23,7 +30,12 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${PORT:-8090}"
 BASE="http://localhost:${PORT}"
-DATA_URL="jdbc:h2:file:./data-verify/onlineshop;DB_CLOSE_ON_EXIT=FALSE"
+# 迭代 3（J3-0）：干净库 = MySQL 独立库 shop_verify + 起服务时 ddl-auto=create 重建表，
+# 等价于原 H2 方案的 rm -rf 数据目录；库不存在时由 createDatabaseIfNotExist 自动建。
+DATA_URL="${VERIFY_DB_URL:-jdbc:mysql://localhost:3306/shop_verify?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true}"
+DB_USER="${DB_USER:-root}"
+DB_PASSWORD="${DB_PASSWORD:-}"
+export DB_USER DB_PASSWORD   # 让步骤 1 的 mvn test 子进程继承测试库凭据
 UPLOAD_DIR="./data-verify/uploads"
 JAR="$ROOT/server/target/online-shop.jar"
 SRV_LOG="$ROOT/server/verify-server.log"
@@ -69,12 +81,15 @@ fi
 [ -f "$JAR" ] || { echo "[verify-all] 找不到 $JAR，请先打包"; exit 1; }
 
 # ---------- [2/4] 干净库起服务 ----------
-echo "==> [2/4] 干净库起服务（端口 $PORT，数据目录 server/data-verify/）"
+echo "==> [2/4] 干净库起服务（端口 $PORT，库 shop_verify 重建表，上传目录 server/data-verify/）"
 rm -rf "$ROOT/server/data-verify"
 cd "$ROOT/server"
 java -jar target/online-shop.jar \
   --server.port="$PORT" \
   --spring.datasource.url="$DATA_URL" \
+  --spring.datasource.username="$DB_USER" \
+  --spring.datasource.password="$DB_PASSWORD" \
+  --spring.jpa.hibernate.ddl-auto=create \
   --app.upload.dir="$UPLOAD_DIR" > "$SRV_LOG" 2>&1 &
 SRV_PID=$!
 

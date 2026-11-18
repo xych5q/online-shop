@@ -10,9 +10,16 @@
 #   - 在同一个容器实例上跑 test-cases/api-smoke-iter2.sh（60 项断言）作为部署验证
 #   - docker save 出的 tar 作为 Release 附件，可直接下载当验收材料
 #
+# 迭代 3（J3-0）：数据库切 MySQL 后，单测不再有 H2 内存库兜底，
+# 因此本 workflow 必须自备 MySQL：
+#   - job 级 services 起一个 MySQL 供 `mvn clean package` 的 77 条单测使用
+#   - 冒烟阶段另起一个 MySQL 容器与 app 容器组网，模拟真实部署形态
+# 凭据为课程演示用的固定值，不放 secrets，避免未配置导致流水线红。
+#
 # 验收时怎么用：
+#   docker compose -f deploy/docker-compose.yml up -d
+#   # 或单独拉镜像（需自行提供 MySQL，见 deploy/部署手册.md）
 #   docker pull ghcr.io/xych5q/online-shop:0.2-iter2
-#   docker run -d --name online-shop -p 8080:8080 ghcr.io/xych5q/online-shop:0.2-iter2
 # ============================================================================
 
 name: Docker Image
@@ -35,6 +42,20 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root_pwd
+          MYSQL_ROOT_HOST: '%'
+          MYSQL_DATABASE: onlineshop_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot_pwd"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -54,7 +75,11 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
           cache: maven
-      - run: cd server && mvn -B clean package
+      - name: 单测与打包（连 services 里的 MySQL）
+        env:
+          DB_USER: root
+          DB_PASSWORD: root_pwd
+        run: cd server && mvn -B clean package
 
       - name: 准备 Buildx
         uses: docker/setup-buildx-action@v3
@@ -76,15 +101,38 @@ jobs:
             ghcr.io/xych5q/online-shop:${{ steps.ver.outputs.tag }}
             ghcr.io/xych5q/online-shop:latest
 
-      - name: 起容器并跑接口冒烟（60 项断言）
+      - name: 起 MySQL 与应用容器并跑接口冒烟（60 项断言）
         run: |
-          docker run -d --name shop -p 8080:8080 \
+          set -eu
+          docker network create shopnet
+
+          docker run -d --name shop-mysql --network shopnet \
+            -e MYSQL_ROOT_PASSWORD=root_pwd \
+            -e MYSQL_ROOT_HOST='%' \
+            -e MYSQL_DATABASE=onlineshop \
+            mysql:8.0 \
+            --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+
+          echo "等待 MySQL 就绪..."
+          for i in $(seq 1 60); do
+            if docker exec shop-mysql mysqladmin ping -h 127.0.0.1 -uroot -proot_pwd --silent >/dev/null 2>&1; then
+              echo "MySQL 已就绪（第 ${i} 次探测）"; break
+            fi
+            sleep 2
+          done
+
+          docker run -d --name shop -p 8080:8080 --network shopnet \
+            -e DB_URL="jdbc:mysql://shop-mysql:3306/onlineshop?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true" \
+            -e DB_USER=root \
+            -e DB_PASSWORD=root_pwd \
             ghcr.io/xych5q/online-shop:${{ steps.ver.outputs.tag }}
+
           for i in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/products || true)
             [ "$code" = "200" ] && break
             sleep 2
           done
+          docker logs --tail 50 shop || true
           BASE=http://localhost:8080 bash test-cases/api-smoke-iter2.sh
 
       - name: 导出镜像 tar

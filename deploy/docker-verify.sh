@@ -3,8 +3,11 @@
 # 在线购物系统 · Docker 镜像一键构建 + 部署验证
 # 第 1 组（组长：陈星宇） | 迭代 2 · 挑战需求 A（tag v0.2-iter2）
 #
-# 用途：在有 Docker 的机器上一键完成「构建镜像 → 起容器 → 等就绪 → 跑接口冒烟」，
+# 用途：在有 Docker 的机器上一键完成「构建镜像 → 起 MySQL → 起应用容器 → 等就绪 → 跑接口冒烟」，
 #       并把产物 tar 导出作验收材料。全过程结果写屏，可直接截图作为部署证据。
+#
+# 迭代 3（J3-0）：数据库切 MySQL，本脚本起 mysql:8.0 容器与应用容器组同一网络，
+#       app 通过容器名连接，不依赖宿主机任何 MySQL 实例；凭据为演示用固定值。
 #
 # 用法（仓库根目录执行）：
 #   bash deploy/docker-verify.sh
@@ -24,6 +27,10 @@ HOST_PORT="${HOST_PORT:-8080}"
 OUT_DIR="${OUT_DIR:-./dist}"
 TAR_NAME="${TAR_NAME:-online-shop-0.2-iter2.tar}"
 SMOKE="test-cases/api-smoke-iter2.sh"
+
+# 迭代 3（J3-0）：宿主机跑单测需要连本机 MySQL，凭据走环境变量（DB_PASSWORD 默认空）
+export DB_USER="${DB_USER:-root}"
+export DB_PASSWORD="${DB_PASSWORD:-}"
 
 ok()   { printf '  [\033[32m OK \033[0m] %s\n' "$1"; }
 info() { printf '  [....] %s\n' "$1"; }
@@ -69,11 +76,37 @@ if [ -n "$IMAGE_SIZE" ]; then
 fi
 docker images "$IMAGE_TAG"
 
-# ---------- 2. 起容器 ----------
-info "启动容器（先清理同名旧容器）"
-docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1
-docker run -d --name "$CONTAINER_NAME" -p "$HOST_PORT":8080 \
-  -e TZ=Asia/Shanghai "$IMAGE_TAG" >/dev/null || die "容器启动失败"
+# ---------- 2. 起 MySQL 与应用容器 ----------
+info "起 MySQL 容器（shop-verify-net 网络内，服务名 shop-mysql）"
+docker network create shop-verify-net >/dev/null 2>&1 || true
+docker rm -f shop-mysql-verify "$CONTAINER_NAME" >/dev/null 2>&1
+docker run -d --name shop-mysql-verify --network shop-verify-net \
+  -e TZ=Asia/Shanghai \
+  -e MYSQL_ROOT_PASSWORD=root_pwd \
+  -e MYSQL_ROOT_HOST='%' \
+  -e MYSQL_DATABASE=onlineshop \
+  mysql:8.0 \
+  --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci >/dev/null \
+  || die "MySQL 容器启动失败"
+
+info "等待 MySQL 就绪（最多 120 秒）"
+MYSQL_READY=0
+for i in $(seq 1 60); do
+  if docker exec shop-mysql-verify mysqladmin ping -h 127.0.0.1 -uroot -proot_pwd --silent >/dev/null 2>&1; then
+    MYSQL_READY=1; break
+  fi
+  sleep 2
+done
+[ "$MYSQL_READY" -eq 1 ] || { docker logs --tail 30 shop-mysql-verify; die "MySQL 未在 120 秒内就绪"; }
+ok "MySQL 已就绪"
+
+info "启动应用容器（先清理同名旧容器）"
+docker run -d --name "$CONTAINER_NAME" --network shop-verify-net -p "$HOST_PORT":8080 \
+  -e TZ=Asia/Shanghai \
+  -e DB_URL="jdbc:mysql://shop-mysql:3306/onlineshop?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true" \
+  -e DB_USER=root \
+  -e DB_PASSWORD=root_pwd \
+  "$IMAGE_TAG" >/dev/null || die "容器启动失败"
 ok "容器已启动：$CONTAINER_NAME"
 
 # ---------- 3. 等就绪 ----------
@@ -108,7 +141,8 @@ if [ "${SMOKE_RC:-0}" -eq 0 ]; then
   echo " 部署验证通过。容器仍在运行，可浏览器访问："
   echo "   买家首页  http://localhost:$HOST_PORT/"
   echo "   卖家后台  http://localhost:$HOST_PORT/admin"
-  echo " 停止并清理：docker rm -f $CONTAINER_NAME"
+  echo "   Navicat 看库  localhost:3306（容器网络内，未对外映射端口，可 docker exec 进容器查）"
+  echo " 停止并清理：docker rm -f $CONTAINER_NAME shop-mysql-verify && docker network rm shop-verify-net"
   echo "=============================================================="
   exit 0
 else
