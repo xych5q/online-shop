@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>好物排队购 —— 我的收藏</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="container">
+  <div class="topbar">
+    <div>
+      <h1>好物排队购</h1>
+      <div class="sub">在线购物 · 先到先得 · 线下当面交易</div>
+    </div>
+    <div class="topbar-links">
+      <span id="topbarUser" class="topbar-user"></span>
+      <a href="/admin.html" class="topbar-admin">卖家入口</a>
+    </div>
+  </div>
+
+  <!-- 我的收藏（J3-1 / FR-D9 G9）：GET /api/favorites，按收藏时间倒序；
+       只列名称、价格、主图；点击整卡进详情；下架/售罄保留并标注、置灰；不提供下单与加购入口 -->
+  <div class="card">
+    <a href="/" class="back-link">‹ 返回列表</a>
+    <div class="section-title">我的收藏</div>
+    <div class="grid" id="favGrid"></div>
+    <div id="favEmpty" class="empty" style="display:none"></div>
+    <div class="list-note" id="favNote">
+      按收藏时间倒序。商品下架或售罄后仍保留在收藏中并标注，不会自动消失；收藏页只用于回看与进入详情，不提供直接下单或加入购物车入口。
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/auth.js"></script>
+<script src="/favorites.js"></script>
+</body>
+</html>

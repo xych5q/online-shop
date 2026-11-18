@@ -52,6 +52,7 @@ function renderTopbarUser() {
   const name = buyerName();
   if (name) {
     box.innerHTML = `你好，<b>${authEsc(name)}</b>
+      · <a href="/favorites.html">我的收藏</a>
       · <a href="/my/history.html">我的历史</a>
       · <a href="#" id="topbarLogout">退出登录</a>`;
     document.getElementById('topbarLogout').addEventListener('click', (e) => {

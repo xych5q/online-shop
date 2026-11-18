@@ -212,6 +212,7 @@ function renderDetail(p) {
         <div class="kv-line">发布时间：${fmtTime(p.publishedAt)}</div>
         <div class="actions">
           <button class="btn btn-primary" id="buyBtn" ${st.disabled ? 'disabled' : ''}>${st.btn}</button>
+          <button class="btn btn-outline" id="favBtn">加入收藏</button>
         </div>
         <div class="hint-banner" id="buyHint"${st.note || st.disabled ? ' style="display:none"' : ''}>未登录时点「立即购买」→ 跳转登录页并提示「请先登录」</div>
         ${st.note ? `<div class="deal-banner">${st.note}</div>` : ''}
@@ -242,6 +243,33 @@ function renderDetail(p) {
 
   if (!st.disabled) {
     $('#buyBtn').addEventListener('click', submitIntent);
+  }
+  const favBtn = $('#favBtn');
+  if (favBtn) favBtn.addEventListener('click', favoriteProduct);
+}
+
+/* ---------- 加入收藏（J3-1 / L3-5：POST /api/favorites，{productId}，重复收藏去重不报错） ----------
+   未登录先跳登录并回到本详情页；成功后就地标记「已收藏」，取消收藏入口在「我的收藏」页（DELETE 幂等） */
+async function favoriteProduct() {
+  if (!currentProduct) return;
+  if (!buyerToken()) {
+    goLogin('请先登录后收藏');
+    return;
+  }
+  const btn = $('#favBtn');
+  btn.disabled = true;
+  try {
+    await api('/api/favorites', { method: 'POST', body: { productId: currentProduct.id } });
+    btn.textContent = '已收藏';
+    toast('已加入收藏，可在「我的收藏」中查看', 'ok');
+  } catch (e) {
+    btn.disabled = false;
+    if (e.status === 401) {
+      clearBuyerSession();
+      goLogin('登录已失效，请重新登录');
+      return;
+    }
+    toast(e.message, 'err');
   }
 }
 
