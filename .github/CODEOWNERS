@@ -2,7 +2,7 @@
 #
 # 作用：改了下面任一文件，GitHub 会自动要求对应 owner 审查，避免互相覆盖。
 # 前提：仓库 Ruleset 里必须勾选「Require review from Code Owners」，否则本文件不生效。
-# 成员：陈星宇 @xych5q（组长）｜董嘉润 @jrdong666（PO）｜王振涛 @Tao1122-del｜林初俊 @Lotus0506｜嵇宇锋 @qfwl1
+# 成员：陈星宇 @xych5q（组长）｜董嘉润 @jrdong666（PO）｜王振涛 @Tao1122-del｜林初俊 @Lotus0ut｜嵇宇锋 @qfwl1
 
 # 数据模型与迁移 —— 陈星宇（组长）
 /server/src/main/java/com/group1/onlineshop/entity/       @xych5q
@@ -14,9 +14,9 @@
 /server/src/main/java/com/group1/onlineshop/service/IntentService.java   @Tao1122-del
 
 # 卖家后台（多商品、类别、库存、客户与购买历史）—— 林初俊
-/server/src/main/java/com/group1/onlineshop/service/ProductService.java         @Lotus0506
-/server/src/main/java/com/group1/onlineshop/service/SellerService.java          @Lotus0506
-/server/src/main/java/com/group1/onlineshop/controller/SellerController.java    @Lotus0506
+/server/src/main/java/com/group1/onlineshop/service/ProductService.java         @Lotus0ut
+/server/src/main/java/com/group1/onlineshop/service/SellerService.java          @Lotus0ut
+/server/src/main/java/com/group1/onlineshop/controller/SellerController.java    @Lotus0ut
 
 # 商品浏览与搜索（查询接口 + 列表页 / 详情页）—— 嵇宇锋
 /server/src/main/resources/static/   @qfwl1
