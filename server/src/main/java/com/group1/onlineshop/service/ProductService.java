@@ -34,9 +34,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 商品服务：发布、冻结/解冻、进入交易、标记交易结果、手动下架、失败意向处置。
- * 发布接口按「多商品发布」需求实现（类别/库存/多图/富文本描述，见 publish 方法注释），
- * 其余交易规则逐条翻译自原型 prototype/single-seller-queue-trade/server.js 与 docs/design/接口设计.md，规则未做改动。
+ * 商品服务：发布、标记交易结果、手动下架、手动调库存、上下架、改挂类别、失败意向处置。
+ *
+ * <p><b>迭代 3 两态改造（L3-1）与废止能力登记</b>：按 SRS FR-S4「商品只有在售与已下架两态，
+ * 不提供冻结与解冻」，删除手动冻结 / 解冻两个接口（原 {@code freeze} / {@code unfreeze} 及
+ * {@code frozenBy} / {@code frozenAt} 字段随之废止，实体侧由陈星宇 C3-1 删除）；
+ * 售罄不再单独成态，改为「已下架 + {@code offShelfReason=SOLD_OUT}」表达（FR-C4）。
+ * 需求依据：FR-S4（两态）、FR-C4（库存归零自动下架、补货可恢复在售）。
+ * 发布接口按「多商品发布」需求实现（类别/库存/多图/富文本描述，见 publish 方法注释）。
  */
 @Service
 @RequiredArgsConstructor
@@ -173,55 +178,21 @@ public class ProductService {
         return result;
     }
 
-    /**
-     * 手动冻结商品。
-     * 业务规则：商品不存在 → 404「商品不存在」；已下架 → 400「商品已下架」；
-     * 仅「在售」可手动冻结 → 否则 400「仅「在售」商品可手动冻结」；
-     * 冻结后 status=FROZEN、frozenBy='manual'、frozenAt=now。
+    /*
+     * 已废止：手动冻结 freeze / 手动解冻 unfreeze（L3-1，SRS FR-S4 商品只有两态，不提供冻结与解冻）。
+     * 迭代 2 的冻结机制（FROZEN + frozenBy='manual'/'auto'）整套移除，历史实现见 v0.2-iter2.1。
      */
-    public Map<String, Object> freeze(long id) {
-        Product product = loadActiveProduct(id);
-        if (product.getStatus() != Product.Status.ON_SALE) {
-            throw new BizException("仅「在售」商品可手动冻结");
-        }
-        product.setStatus(Product.Status.FROZEN);
-        product.setFrozenBy("manual");
-        product.setFrozenAt(LocalDateTime.now());
-        productRepository.save(product);
-        return ok();
-    }
-
-    /**
-     * 手动解冻商品。
-     * 业务规则：未处于冻结状态 → 400「商品未处于冻结状态」；
-     * 仅 frozenBy='manual'（手动冻结）可解冻，交易冻结（frozenBy='auto'）必须先标记交易结果，
-     * 否则 400「交易中的商品不能手动解冻」；解冻后恢复在售并清空 frozenBy/frozenAt。
-     */
-    public Map<String, Object> unfreeze(long id) {
-        Product product = loadActiveProduct(id);
-        if (product.getStatus() != Product.Status.FROZEN) {
-            throw new BizException("商品未处于冻结状态");
-        }
-        if (!"manual".equals(product.getFrozenBy())) {
-            throw new BizException("交易中的商品不能手动解冻");
-        }
-        product.setStatus(Product.Status.ON_SALE);
-        product.setFrozenBy(null);
-        product.setFrozenAt(null);
-        productRepository.save(product);
-        return ok();
-    }
 
     /**
      * 标记交易结果。
-     * 业务规则：仅交易冻结中（FROZEN 且 frozenBy='auto'）可标记 → 否则 400「当前没有进行中的交易」；
+     * 业务规则：存在进行中交易（IN_TRANSACTION 意向）才可标记 → 否则 400「当前没有进行中的交易」；
      * result 只接受 success / fail，其他值 400「参数错误」。
      * success：胜出意向置 SUCCESS 且 disposed=true，队列剩余全部转 FAILED 且 disposed=true，商品下架进历史（closedAt=now），所有口令码随之失效；
      * fail：当前意向转 FAILED（disposed=false，待卖家处置）；队列有人 → 下一位自动递补进入交易（商品保持冻结）；队列无人 → 商品自动恢复在售。
      */
     public Map<String, Object> dealResult(long id, String result) {
-        Product product = loadActiveProduct(id);
-        if (product.getStatus() != Product.Status.FROZEN || !"auto".equals(product.getFrozenBy())) {
+        Product product = loadOnSaleProduct(id);
+        if (!tradeService.hasActiveDeal(product.getId())) {
             throw new BizException("当前没有进行中的交易");
         }
         if (!"success".equals(result) && !"fail".equals(result)) {
@@ -233,12 +204,12 @@ public class ProductService {
 
     /**
      * 手动下架。
-     * 业务规则：交易冻结中（FROZEN 且 frozenBy='auto'）须先标记交易结果 → 400「交易中的商品请先标记交易结果」；
+     * 业务规则：存在进行中的交易（旧意向队列遗留流程）须先标记交易结果 → 400「交易中的商品请先标记交易结果」；
      * 下架时该商品队列里所有排队中意向置 FAILED 且 disposed=true，待处置失败意向也全部置 disposed=true，商品置 OFF_SHELF、closedAt=now。
      */
     public Map<String, Object> offshelf(long id) {
-        Product product = loadActiveProduct(id);
-        if (product.getStatus() == Product.Status.FROZEN && !"manual".equals(product.getFrozenBy())) {
+        Product product = loadOnSaleProduct(id);
+        if (tradeService.hasActiveDeal(product.getId())) {
             throw new BizException("交易中的商品请先标记交易结果");
         }
         for (Intent it : intentRepository
@@ -261,11 +232,11 @@ public class ProductService {
 
     /**
      * 商品改挂类别（A.1.2-4）。
-     * 规则：商品不存在 404「商品不存在」；已下架 400「商品已下架」（历史只读，售罄商品允许改挂）；
+     * 规则：商品不存在 404「商品不存在」；已下架（手动）400「商品已下架」（历史只读，售罄自动下架允许改挂）；
      * categoryId 缺失 400「商品类别必填」；类别不存在 400「类别不存在」；一级类别 400「商品必须挂到二级类别」。
      */
     public Map<String, Object> updateCategory(long id, ProductCategoryUpdateRequest req) {
-        Product product = loadActiveProduct(id);
+        Product product = loadEditableProduct(id);
         Long categoryId = req.getCategoryId();
 
         if (categoryId == null) {
@@ -284,15 +255,16 @@ public class ProductService {
 
     /**
      * 手动调库存（A.1.3-5）。
-     * 规则：目标库存必填且 ≥0（400「库存不能为负数」）；已下架商品不可调（loadActiveProduct 拦截）；
+     * 规则：目标库存必填且 ≥0（400「库存不能为负数」）；手动下架商品不可调（历史只读），
+     * 售罄自动下架（OFF_SHELF + offShelfReason=SOLD_OUT）允许补货；
      * 每次调整写一条 stock_log 流水（操作人、调整前后、变动量、原因）；
-     * 状态联动（与交易服务 T6b / A.1.3-3 一致）：
-     *   - 在售且调到 0 → SOLD_OUT（offShelfReason='SOLD_OUT'、closedAt=now），队列未成交意向置 SOLD_OUT（补货不复活）；
-     *   - 售罄且调到 ≥1 → 回 ON_SALE 并清空下架痕迹（补货恢复在售）；
+     * 状态联动（两态口径，FR-C4）：
+     *   - 在售且调到 0 → OFF_SHELF + offShelfReason='SOLD_OUT' + closedAt=now（售罄自动下架），队列未成交意向置 SOLD_OUT（补货不复活）；
+     *   - 售罄自动下架且调到 ≥1 → 回 ON_SALE 并清空下架痕迹（补货恢复在售）；
      * 返回 {ok:true, id, stock, status, updatedAt}。
      */
     public Map<String, Object> updateStock(long id, ProductStockUpdateRequest req, String operator) {
-        Product product = loadActiveProduct(id);
+        Product product = loadRestockableProduct(id);
         Integer stock = req.getStock();
 
         if (stock == null) {
@@ -305,9 +277,9 @@ public class ProductService {
         int before = product.getStock() == null ? 0 : product.getStock();
         int after = stock;
 
-        // 状态联动：在售调零 → 售罄；售罄补货 → 回在售
+        // 状态联动（两态）：在售调零 → 售罄自动下架；售罄自动下架补货 → 回在售
         if (after == 0 && product.getStatus() == Product.Status.ON_SALE) {
-            product.setStatus(Product.Status.SOLD_OUT);
+            product.setStatus(Product.Status.OFF_SHELF);
             product.setOffShelfReason("SOLD_OUT");
             product.setClosedAt(LocalDateTime.now());
             for (Intent it : intentRepository
@@ -316,7 +288,7 @@ public class ProductService {
                 it.setDisposed(true);
                 intentRepository.save(it);
             }
-        } else if (after >= 1 && product.getStatus() == Product.Status.SOLD_OUT) {
+        } else if (after >= 1 && isSoldOutOffShelf(product)) {
             product.setStatus(Product.Status.ON_SALE);
             product.setOffShelfReason(null);
             product.setClosedAt(null);
@@ -346,21 +318,22 @@ public class ProductService {
 
     /**
      * 上架。
-     * 规则：商品不存在 404「商品不存在」；仅手动下架（OFF_SHELF）可上架 → ON_SALE 并清空 closedAt/offShelfReason；
-     * 售罄商品 400「售罄商品请先补库存」（补库存 ≥1 会自动回在售）；其余状态 400「仅「已下架」商品可上架」。
+     * 规则：商品不存在 404「商品不存在」；仅已下架（OFF_SHELF）可上架 → ON_SALE 并清空 closedAt/offShelfReason；
+     * 售罄自动下架（OFF_SHELF + offShelfReason=SOLD_OUT）400「售罄商品请先补库存」（补库存 ≥1 会自动回在售）；
+     * 在售商品 400「仅「已下架」商品可上架」。
      */
     public Map<String, Object> onshelf(long id) {
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new BizException("商品不存在", 404));
         if (product.getStatus() == Product.Status.OFF_SHELF) {
+            if (isSoldOutOffShelf(product)) {
+                throw new BizException("售罄商品请先补库存");
+            }
             product.setStatus(Product.Status.ON_SALE);
             product.setOffShelfReason(null);
             product.setClosedAt(null);
             productRepository.save(product);
             return ok();
-        }
-        if (product.getStatus() == Product.Status.SOLD_OUT) {
-            throw new BizException("售罄商品请先补库存");
         }
         throw new BizException("仅「已下架」商品可上架");
     }
@@ -387,11 +360,11 @@ public class ProductService {
 
     /**
      * 买家侧当前商品（无鉴权）。
-     * 业务规则：只返回在售或冻结的商品，无则返回 null（前端显示「暂无商品在售」）；不返回任何意向或口令码信息。
+     * 业务规则：只返回在售的商品，无则返回 null（前端显示「暂无商品在售」）；不返回任何意向或口令码信息。
      */
     public Map<String, Object> activeProduct() {
         return productRepository
-                .findFirstByStatusInOrderByCreatedAtAsc(List.of(Product.Status.ON_SALE, Product.Status.FROZEN))
+                .findFirstByStatusInOrderByCreatedAtAsc(List.of(Product.Status.ON_SALE))
                 .map(this::publicProduct)
                 .orElse(null);
     }
@@ -410,21 +383,54 @@ public class ProductService {
         m.put("imageUrls", productImageRepository.findByProductIdOrderBySortOrderAscIdAsc(p.getId())
                 .stream().map(pi -> "/uploads/" + pi.getFilename()).toList());
         m.put("status", p.getStatus().name().toLowerCase());
-        // 裁决 C11：买家端要区分两类冻结文案——auto=交易中（仍可提交意向）、manual=卖家停售（不可提交），
-        // 故把 frozenBy 一并暴露；仅在冻结态有意义，其余状态为 null。
-        m.put("frozenBy", p.getStatus() == Product.Status.FROZEN ? p.getFrozenBy() : null);
+        // 两态改造（L3-1）：frozenBy 出参随冻结机制一并删除，买家侧只按在售 / 已下架区分
         m.put("publishedAt", p.getCreatedAt());
         return m;
     }
 
-    /** 按 id 加载未下架商品：不存在抛 404，已下架抛 400（与原型路由行为一致） */
-    private Product loadActiveProduct(long id) {
-        Product product = productRepository.findById(id)
+    /** 按 id 加载商品：不存在抛 404 */
+    private Product loadProduct(long id) {
+        return productRepository.findById(id)
                 .orElseThrow(() -> new BizException("商品不存在", 404));
-        if (product.getStatus() == Product.Status.OFF_SHELF) {
+    }
+
+    /** 按 id 加载在售商品：不存在抛 404，已下架抛 400「商品已下架」 */
+    private Product loadOnSaleProduct(long id) {
+        Product product = loadProduct(id);
+        if (product.getStatus() != Product.Status.ON_SALE) {
             throw new BizException("商品已下架");
         }
         return product;
+    }
+
+    /**
+     * 按 id 加载可编辑商品（改挂类别）：不存在抛 404；
+     * 手动下架抛 400「商品已下架」（历史只读）；售罄自动下架允许改挂（与迭代 2 一致）。
+     */
+    private Product loadEditableProduct(long id) {
+        Product product = loadProduct(id);
+        if (product.getStatus() == Product.Status.OFF_SHELF && !isSoldOutOffShelf(product)) {
+            throw new BizException("商品已下架");
+        }
+        return product;
+    }
+
+    /**
+     * 按 id 加载可调库存商品：不存在抛 404；
+     * 在售与售罄自动下架（可补货）允许调整；手动下架抛 400「商品已下架」。
+     */
+    private Product loadRestockableProduct(long id) {
+        Product product = loadProduct(id);
+        if (product.getStatus() == Product.Status.OFF_SHELF && !isSoldOutOffShelf(product)) {
+            throw new BizException("商品已下架");
+        }
+        return product;
+    }
+
+    /** 是否为「售罄自动下架」：两态下售罄不再独立成态，以 OFF_SHELF + offShelfReason=SOLD_OUT 表达 */
+    private boolean isSoldOutOffShelf(Product product) {
+        return product.getStatus() == Product.Status.OFF_SHELF
+                && "SOLD_OUT".equals(product.getOffShelfReason());
     }
 
     /**
