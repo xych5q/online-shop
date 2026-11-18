@@ -22,6 +22,9 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     /** 卖家订单列表：全部订单按下单时间倒序分页（FR-S5） */
     Page<Order> findAllByOrderByCreatedAtDesc(Pageable pageable);
 
+    /** 卖家订单列表按状态筛选分页（P5，W3-3；新增一行派生查询，实体归口陈星宇请过目） */
+    Page<Order> findAllByStatusOrderByCreatedAtDesc(Order.Status status, Pageable pageable);
+
     /** 按状态统计（订单域进度口径） */
     long countByStatus(Order.Status status);
 
