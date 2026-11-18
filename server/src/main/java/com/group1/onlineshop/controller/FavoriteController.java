@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
@@ -30,10 +31,16 @@ public class FavoriteController {
 
     private final FavoriteService favoriteService;
 
-    /** 我的收藏列表：{ok,total,items[]}；每项带商品名/价格/主图/状态/下架原因/是否可购买/收藏时间。 */
+    /**
+     * 我的收藏列表（分页）：{ok,page,pageSize,totalPages,total,items[]}；
+     * 每项带商品名/价格/主图/状态/下架原因/是否可购买/收藏时间。
+     * page 从 1 起，size 默认 10、上限 100（与订单/历史口径一致）。
+     */
     @GetMapping("/api/favorites")
-    public Map<String, Object> list(HttpServletRequest request) {
-        return favoriteService.list(token(request));
+    public Map<String, Object> list(HttpServletRequest request,
+                                    @RequestParam(required = false) Integer page,
+                                    @RequestParam(required = false) Integer size) {
+        return favoriteService.list(token(request), page, size);
     }
 
     /** 收藏商品：入参 {productId}；已收藏直接成功（G15 去重不报错）。 */

@@ -5,6 +5,7 @@ import com.group1.onlineshop.entity.Product;
 import com.group1.onlineshop.repository.BuyerRepository;
 import com.group1.onlineshop.repository.FavoriteRepository;
 import com.group1.onlineshop.repository.ProductRepository;
+import com.group1.onlineshop.service.FavoriteService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,6 +19,8 @@ import java.math.BigDecimal;
 
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -51,6 +54,9 @@ class FavoriteApiTest {
 
     @Autowired
     private BuyerRepository buyerRepository;
+
+    @Autowired
+    private FavoriteService favoriteService;
 
     @BeforeEach
     void cleanUp() {
@@ -95,6 +101,9 @@ class FavoriteApiTest {
 
         mockMvc.perform(get("/api/favorites").header("X-Token", token))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.pageSize").value(10))
+                .andExpect(jsonPath("$.totalPages").value(1))
                 .andExpect(jsonPath("$.total").value(1))
                 .andExpect(jsonPath("$.items[0].productId").value(product.getId()))
                 .andExpect(jsonPath("$.items[0].name").value("收藏商品"))
@@ -236,6 +245,53 @@ class FavoriteApiTest {
         mockMvc.perform(get("/api/favorites").header("X-Token", token))
                 .andExpect(jsonPath("$.items[0].productId").value(p2.getId()))
                 .andExpect(jsonPath("$.items[1].productId").value(p1.getId()));
+    }
+
+    // ---------- 分页 / 转收藏 ----------
+
+    /** 用例 12：分页——12 条收藏按 10 条/页分两页；page 越界取最后一页；size 上限 100。 */
+    @Test
+    void 收藏列表分页() throws Exception {
+        String token = registerBuyer("favk");
+        for (int i = 0; i < 12; i++) {
+            Product product = newProduct("分页商品" + i, "1.00", Product.Status.ON_SALE);
+            favorite(token, product.getId());
+        }
+
+        mockMvc.perform(get("/api/favorites").header("X-Token", token))
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.pageSize").value(10))
+                .andExpect(jsonPath("$.totalPages").value(2))
+                .andExpect(jsonPath("$.total").value(12))
+                .andExpect(jsonPath("$.items.length()").value(10));
+        mockMvc.perform(get("/api/favorites?page=2").header("X-Token", token))
+                .andExpect(jsonPath("$.page").value(2))
+                .andExpect(jsonPath("$.items.length()").value(2));
+        // 越界取最后一页
+        mockMvc.perform(get("/api/favorites?page=99").header("X-Token", token))
+                .andExpect(jsonPath("$.page").value(2))
+                .andExpect(jsonPath("$.items.length()").value(2));
+        mockMvc.perform(get("/api/favorites?size=5").header("X-Token", token))
+                .andExpect(jsonPath("$.pageSize").value(5))
+                .andExpect(jsonPath("$.totalPages").value(3))
+                .andExpect(jsonPath("$.items.length()").value(5));
+        // size 超过上限按 100 截断
+        mockMvc.perform(get("/api/favorites?size=500").header("X-Token", token))
+                .andExpect(jsonPath("$.pageSize").value(100))
+                .andExpect(jsonPath("$.totalPages").value(1))
+                .andExpect(jsonPath("$.items.length()").value(12));
+    }
+
+    /** 用例 13：购物车转收藏内部方法——首次 true，重复 false（静默去重，B.2.4-3）。 */
+    @Test
+    void 转收藏内部方法幂等() throws Exception {
+        Product product = newProduct("转收藏商品", "8.80", Product.Status.ON_SALE);
+        String token = registerBuyer("favm");
+        Long buyerId = buyerRepository.findByToken(token).orElseThrow().getId();
+
+        assertTrue(favoriteService.addForBuyer(buyerId, product.getId()), "首次转收藏应新增");
+        assertFalse(favoriteService.addForBuyer(buyerId, product.getId()), "重复转收藏应静默去重");
+        assertEquals(1, favoriteRepository.count());
     }
 
     // ---------- 辅助 ----------

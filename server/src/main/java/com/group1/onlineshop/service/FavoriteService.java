@@ -36,21 +36,32 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class FavoriteService {
 
+    /** 收藏列表每页条数：需求未规定分页，组内按订单/历史口径统一为 10 条/页（P5 组会授权自定） */
+    private static final int DEFAULT_PAGE_SIZE = 10;
+
+    /** 每页条数上限，防止一次拉取过大（与卖家商品列表口径一致） */
+    private static final int MAX_PAGE_SIZE = 100;
+
     private final FavoriteRepository favoriteRepository;
     private final ProductRepository productRepository;
     private final ProductImageRepository productImageRepository;
     private final BuyerService buyerService;
 
     /**
-     * 当前登录买家的收藏列表。
+     * 当前登录买家的收藏列表（分页）。
      *
      * <p>规则：需买家鉴权（401「未登录或登录已失效」）；按收藏时间倒序、同一时间按 id 倒序兜底；
-     * 已下架 / 售罄商品<b>仍返回</b>，由 status + offShelfReason + available 标注，便于前端置灰。
+     * 已下架 / 售罄商品<b>仍返回</b>，由 status + offShelfReason 标注（B.2.1-6：保留并标注、不自动消失），
+     * 前端据此显示「已下架 / 无货」。
      *
-     * <p>返回：{ok, total, items[]}；每项
-     * {productId, name, price, imageUrl, status, offShelfReason, available, favoritedAt}。
+     * <p>分页：需求未规定，组内按订单/历史口径统一 10 条/页；page 从 1 起、越界取最后一页，
+     * size 默认 10、上限 100。分页在应用层完成（收藏仓储归 C3-1，本任务不改 repository）。
+     *
+     * <p>返回：{ok, page, pageSize, totalPages, total, items[]}；每项
+     * {productId, name, price, imageUrl, status, offShelfReason, available, favoritedAt}——
+     * 展示口径（B.2.1-4）：列表只要名称、价格、主图，点击进商品详情，不提供下单/加购入口。
      */
-    public Map<String, Object> list(String token) {
+    public Map<String, Object> list(String token, Integer page, Integer size) {
         Buyer buyer = buyerService.requireAuth(token);
         List<Favorite> favorites = new ArrayList<>(
                 favoriteRepository.findAllByBuyerIdOrderByCreatedAtDesc(buyer.getId()));
@@ -58,8 +69,15 @@ public class FavoriteService {
         favorites.sort(Comparator.comparing(Favorite::getCreatedAt).reversed()
                 .thenComparing(Favorite::getId, Comparator.reverseOrder()));
 
+        int pageSize = size == null || size < 1 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
+        long total = favorites.size();
+        int totalPages = (int) Math.max(1, (total + pageSize - 1) / pageSize);
+        int cur = Math.min(Math.max(1, page == null ? 1 : page), totalPages);
+        int from = (int) Math.min((long) (cur - 1) * pageSize, favorites.size());
+        int to = Math.min(from + pageSize, favorites.size());
+
         List<Map<String, Object>> items = new ArrayList<>();
-        for (Favorite favorite : favorites) {
+        for (Favorite favorite : favorites.subList(from, to)) {
             Product product = productRepository.findById(favorite.getProductId()).orElse(null);
             if (product == null) {
                 continue; // 商品不存在（当前无删除商品功能，防御性跳过）
@@ -80,7 +98,10 @@ public class FavoriteService {
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", true);
-        result.put("total", items.size());
+        result.put("page", cur);
+        result.put("pageSize", pageSize);
+        result.put("totalPages", totalPages);
+        result.put("total", total);
         result.put("items", items);
         return result;
     }
@@ -93,21 +114,34 @@ public class FavoriteService {
      */
     public Map<String, Object> add(String token, Long productId) {
         Buyer buyer = buyerService.requireAuth(token);
-        if (productId == null) {
+        addForBuyer(buyer.getId(), productId);
+        return ok();
+    }
+
+    /**
+     * 供购物车「批量转收藏」内部调用（FR-D11 / B.2.4，模块负责人：董嘉润）。
+     *
+     * <p>按 buyerId 幂等收藏，不经过 token：已收藏<b>静默去重返回 false</b>（B.2.4-3 不报错），
+     * 新收藏返回 true。调用方负责在成功后把对应条目移出购物车（B.2.4-1「转」= 转移，两边不都留）。
+     *
+     * @throws BizException productId 为空 400「请选择要收藏的商品」；商品不存在 404「商品不存在」
+     */
+    public boolean addForBuyer(Long buyerId, Long productId) {
+        if (buyerId == null || productId == null) {
             throw new BizException("请选择要收藏的商品");
         }
         if (!productRepository.existsById(productId)) {
             throw new BizException("商品不存在", 404);
         }
-        if (favoriteRepository.existsByBuyerIdAndProductId(buyer.getId(), productId)) {
-            return ok(); // G15：重复收藏去重，不报错
+        if (favoriteRepository.existsByBuyerIdAndProductId(buyerId, productId)) {
+            return false; // B.2.4-3：转收藏时已收藏静默去重，不报错
         }
         Favorite favorite = new Favorite();
-        favorite.setBuyerId(buyer.getId());
+        favorite.setBuyerId(buyerId);
         favorite.setProductId(productId);
         favorite.setCreatedAt(LocalDateTime.now());
         favoriteRepository.save(favorite);
-        return ok();
+        return true;
     }
 
     /**
